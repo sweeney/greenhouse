@@ -1,0 +1,192 @@
+package config
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
+// staticTokenSource satisfies TokenSource for tests.
+type staticTokenSource struct{ token string }
+
+func (s *staticTokenSource) Token(_ context.Context) (string, error) { return s.token, nil }
+func (s *staticTokenSource) Invalidate()                             {}
+
+// trackingTokenSource records whether Invalidate was called.
+type trackingTokenSource struct {
+	token       string
+	invalidated bool
+}
+
+func (t *trackingTokenSource) Token(_ context.Context) (string, error) { return t.token, nil }
+func (t *trackingTokenSource) Invalidate()                             { t.invalidated = true }
+
+func newTestFetcher(t *testing.T, mux *http.ServeMux, tokens TokenSource) *Fetcher {
+	t.Helper()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return &Fetcher{
+		BaseURL:    srv.URL,
+		Tokens:     tokens,
+		HTTPClient: srv.Client(),
+	}
+}
+
+// serveNamespace serves a JSON namespace requiring Bearer test-token.
+func serveNamespace(mux *http.ServeMux, ns string, v any) {
+	mux.HandleFunc("/api/v1/config/"+ns, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(v) //nolint:errcheck
+	})
+}
+
+func TestFetcher_RefreshPopulatesSnapshot(t *testing.T) {
+	mux := http.NewServeMux()
+	serveNamespace(mux, "statehouse_devices", map[string]any{
+		"glowsensorth1": map[string]any{
+			// Legacy Z2M shorthand: normaliseDevices folds these into
+			// scheme=zigbee, primary=ieee_address, display=friendly_name.
+			"ieee_address":  "0xaabbccddeeff0011",
+			"friendly_name": "Glow Sensor",
+			"class":         "environmental_sensor",
+			"display_name":  "Network Cabinet",
+			"location":      "office",
+		},
+	})
+
+	f := newTestFetcher(t, mux, &staticTokenSource{token: "test-token"})
+	f.Refresh(context.Background())
+
+	devices := f.Devices()
+	d, ok := devices["glowsensorth1"]
+	if !ok {
+		t.Fatal("glowsensorth1 missing after refresh")
+	}
+	if d.Class != "environmental_sensor" {
+		t.Errorf("class: got %q, want environmental_sensor", d.Class)
+	}
+	if d.Scheme != "zigbee" {
+		t.Errorf("scheme: got %q, want zigbee (normalised)", d.Scheme)
+	}
+	if d.Primary != "0xaabbccddeeff0011" {
+		t.Errorf("primary: got %q, want 0xaabbccddeeff0011 (normalised)", d.Primary)
+	}
+
+	st := f.Statuses()
+	if !st["statehouse_devices"].OK {
+		t.Error("statehouse_devices status not OK")
+	}
+	if st["statehouse_devices"].FetchedAt.IsZero() {
+		t.Error("statehouse_devices fetched_at is zero")
+	}
+}
+
+func TestFetcher_DevicesReturnsCopy(t *testing.T) {
+	mux := http.NewServeMux()
+	serveNamespace(mux, "statehouse_devices", map[string]any{
+		"climate_basement": map[string]any{"class": "environmental_sensor"},
+	})
+
+	f := newTestFetcher(t, mux, &staticTokenSource{token: "test-token"})
+	f.Refresh(context.Background())
+
+	got := f.Devices()
+	got["climate_basement"] = DeviceConfig{Class: "mutated"}
+	got["injected"] = DeviceConfig{}
+
+	again := f.Devices()
+	if again["climate_basement"].Class != "environmental_sensor" {
+		t.Error("mutating returned map leaked into the held snapshot")
+	}
+	if _, ok := again["injected"]; ok {
+		t.Error("injecting into returned map leaked into the held snapshot")
+	}
+}
+
+func TestFetcher_401InvalidatesAndKeepsSnapshot(t *testing.T) {
+	// Phase 1: a healthy server populates the snapshot.
+	good := http.NewServeMux()
+	serveNamespace(good, "statehouse_devices", map[string]any{
+		"climate_groundfloor": map[string]any{"class": "environmental_sensor", "display_name": "Ground Floor"},
+	})
+	goodSrv := httptest.NewServer(good)
+	defer goodSrv.Close()
+
+	src := &trackingTokenSource{token: "stale-token"}
+	f := &Fetcher{BaseURL: goodSrv.URL, Tokens: &staticTokenSource{token: "test-token"}, HTTPClient: goodSrv.Client()}
+	f.Refresh(context.Background())
+	if _, ok := f.Devices()["climate_groundfloor"]; !ok {
+		t.Fatal("precondition: climate_groundfloor should be present after first refresh")
+	}
+
+	// Phase 2: point the fetcher at a server that always 401s.
+	bad := http.NewServeMux()
+	bad.HandleFunc("/api/v1/config/statehouse_devices", func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	})
+	badSrv := httptest.NewServer(bad)
+	defer badSrv.Close()
+	f.BaseURL = badSrv.URL
+	f.HTTPClient = badSrv.Client()
+	f.Tokens = src
+
+	f.Refresh(context.Background())
+
+	if !src.invalidated {
+		t.Error("expected Invalidate() after 401")
+	}
+	// Fail-open: prior snapshot is retained.
+	if _, ok := f.Devices()["climate_groundfloor"]; !ok {
+		t.Error("device snapshot was wiped after a 401 (should fail-open)")
+	}
+	if f.Statuses()["statehouse_devices"].OK {
+		t.Error("status should record the 401 failure")
+	}
+}
+
+func TestFetcher_TokenFailureKeepsSnapshot(t *testing.T) {
+	mux := http.NewServeMux()
+	serveNamespace(mux, "statehouse_devices", map[string]any{
+		"climate_firstfloor": map[string]any{"class": "environmental_sensor"},
+	})
+	f := newTestFetcher(t, mux, &staticTokenSource{token: "test-token"})
+	f.Refresh(context.Background())
+	if _, ok := f.Devices()["climate_firstfloor"]; !ok {
+		t.Fatal("precondition: climate_firstfloor present after first refresh")
+	}
+
+	// Swap in a token source that errors.
+	f.Tokens = &errTokenSource{}
+	f.Refresh(context.Background())
+
+	if _, ok := f.Devices()["climate_firstfloor"]; !ok {
+		t.Error("snapshot wiped after token failure (should fail-open)")
+	}
+	if f.Statuses()["statehouse_devices"].OK {
+		t.Error("status should record token failure")
+	}
+}
+
+func TestFetcher_EmptyBaseURLNoOp(t *testing.T) {
+	f := &Fetcher{Tokens: &errTokenSource{}}
+	f.Refresh(context.Background()) // must not panic, must not call Token
+	if len(f.Devices()) != 0 {
+		t.Error("expected empty devices")
+	}
+	if len(f.Statuses()) != 0 {
+		t.Error("expected no statuses recorded for empty base url")
+	}
+}
+
+type errTokenSource struct{}
+
+func (errTokenSource) Token(context.Context) (string, error) {
+	return "", context.DeadlineExceeded
+}
+func (errTokenSource) Invalidate() {}

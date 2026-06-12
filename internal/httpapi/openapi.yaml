@@ -1,0 +1,611 @@
+openapi: 3.0.3
+info:
+  title: Greenhouse API
+  description: >
+    Read-side climate/environment reporting HTTP API. Turns per-sensor
+    environmental telemetry (temperature, humidity, pressure, wind, rainfall,
+    light, UV) into time-series charts over arbitrary windows. Climate data is
+    non-additive: values are bucketed and grouped with mean/min/max/last, never
+    summed. All endpoints except /healthz and /openapi.json require a Bearer JWT
+    (user or service token) issued by the configured identity service.
+  version: "0.1.0"
+  contact:
+    name: Martin Sweeney
+    email: martin@sweeney.io
+    url: https://github.com/sweeney/greenhouse
+  license:
+    name: Proprietary
+    url: https://github.com/sweeney/greenhouse
+servers:
+  - url: __PUBLIC_URL__
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: data
+    description: Device catalog, climate series, latest readings and field registry (require a Bearer JWT).
+  - name: system
+    description: Health and API spec endpoints.
+
+paths:
+  /healthz:
+    get:
+      summary: Health check
+      description: Returns server health, Influx reachability, and remote config fetch status. No auth required.
+      operationId: getHealth
+      security: []
+      tags: [system]
+      responses:
+        "200":
+          description: Server is running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  /openapi.json:
+    get:
+      summary: OpenAPI spec
+      description: This spec document, as JSON. No auth required.
+      operationId: getOpenAPISpec
+      security: []
+      tags: [system]
+      responses:
+        "200":
+          description: OpenAPI 3.0 spec
+          content:
+            application/json:
+              schema:
+                type: object
+
+  /devices:
+    get:
+      summary: Climate device catalog
+      description: >
+        Discovery catalog of climate devices (class environmental_sensor) from
+        the statehouse_devices namespace, each with a `fields` hint of the
+        environmental fields it reports. The hint comes from the device config's
+        explicit `fields` list when present; otherwise it falls back to the full
+        field registry. Lets a UI build a device picker without knowing Influx.
+        Sorted by id.
+      operationId: getDevices
+      tags: [data]
+      responses:
+        "200":
+          description: Climate device catalog
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DevicesCatalog"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+  /series:
+    get:
+      summary: Climate time-series
+      description: >
+        Multi-series climate time-series over the window for one field: per-series
+        values aligned to a shared bucket axis. group_by selects device (default,
+        one series per climate sensor) or location (the MEAN of a room's sensors —
+        never a sum). field selects the measurement (default temperature_c); fn
+        selects the per-bucket aggregation (mean default, min, max, last). The
+        shape param chooses columnar (default) or row-oriented output. Empty
+        buckets are null (no reading), not zero.
+      operationId: getSeries
+      tags: [data]
+      parameters:
+        - $ref: "#/components/parameters/Window"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Interval"
+        - $ref: "#/components/parameters/Field"
+        - $ref: "#/components/parameters/Fn"
+        - $ref: "#/components/parameters/GroupBy"
+        - $ref: "#/components/parameters/Shape"
+      responses:
+        "200":
+          description: >
+            Climate time-series. shape=columns → SeriesResponse (shared buckets
+            axis + per-series arrays); shape=rows → RowsResponse (flat rows).
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/SeriesResponse"
+                  - $ref: "#/components/schemas/RowsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+
+  /devices/{id}/series:
+    get:
+      summary: Device climate time-series
+      description: >
+        Single-device convenience form of /series: the same response shapes
+        carrying exactly one series for the device. Non-climate devices return
+        400. field/fn/shape behave as on /series.
+      operationId: getDeviceSeries
+      tags: [data]
+      parameters:
+        - $ref: "#/components/parameters/DeviceID"
+        - $ref: "#/components/parameters/Window"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Interval"
+        - $ref: "#/components/parameters/Field"
+        - $ref: "#/components/parameters/Fn"
+        - $ref: "#/components/parameters/Shape"
+      responses:
+        "200":
+          description: >
+            Climate time-series for the device. shape=columns → SeriesResponse;
+            shape=rows → RowsResponse.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/SeriesResponse"
+                  - $ref: "#/components/schemas/RowsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+
+  /devices/{id}/latest:
+    get:
+      summary: Device latest reading
+      description: >
+        The device's most recent reading across all the fields it reports, for
+        dashboards. Only registered fields are surfaced. Non-climate devices
+        return 400.
+      operationId: getDeviceLatest
+      tags: [data]
+      parameters:
+        - $ref: "#/components/parameters/DeviceID"
+      responses:
+        "200":
+          description: Latest reading per field
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LatestResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "502":
+          $ref: "#/components/responses/BadGateway"
+
+  /fields:
+    get:
+      summary: Field registry
+      description: >
+        The registry of chartable environmental fields (name, unit, default
+        aggregation) so consumers can build field pickers.
+      operationId: getFields
+      tags: [data]
+      responses:
+        "200":
+          description: Field registry
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FieldsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
+components:
+  parameters:
+    DeviceID:
+      name: id
+      in: path
+      required: true
+      description: Device id (key in the statehouse_devices namespace).
+      schema:
+        type: string
+    Window:
+      name: window
+      in: query
+      required: false
+      description: Window spec. Defaults to "today".
+      schema:
+        type: string
+        enum: [today, week, month, custom]
+        default: today
+    From:
+      name: from
+      in: query
+      required: false
+      description: Custom window start (RFC3339). Required when window=custom.
+      schema:
+        type: string
+        format: date-time
+    To:
+      name: to
+      in: query
+      required: false
+      description: Custom window end (RFC3339). Required when window=custom.
+      schema:
+        type: string
+        format: date-time
+    Interval:
+      name: interval
+      in: query
+      required: false
+      description: >
+        Bucket granularity. Defaults smartly to the window (today→1h,
+        week/month→1d, custom→by span). An interval whose bucket count over the
+        window exceeds the ~1000 cap returns 400 asking for a coarser interval.
+      schema:
+        type: string
+        enum: [5m, 15m, 30m, 1h, 6h, 1d]
+    Field:
+      name: field
+      in: query
+      required: false
+      description: >
+        The environmental field to chart. Defaults to temperature_c. An unknown
+        field returns 400.
+      schema:
+        type: string
+        enum: [temperature_c, humidity_pct, pressure_hpa, wind_speed_ms, wind_dir_deg, rainfall_mm, illuminance_lux, uv_index]
+        default: temperature_c
+    Fn:
+      name: fn
+      in: query
+      required: false
+      description: >
+        Per-bucket aggregation. Defaults to mean. Climate is non-additive, so
+        sum is deliberately not offered.
+      schema:
+        type: string
+        enum: [mean, min, max, last]
+        default: mean
+    GroupBy:
+      name: group_by
+      in: query
+      required: false
+      description: >
+        How to group series. "device" (default) yields one series per climate
+        sensor. "location" combines a room's sensors with the MEAN of their
+        readings (never a sum).
+      schema:
+        type: string
+        enum: [device, location]
+        default: device
+    Shape:
+      name: shape
+      in: query
+      required: false
+      description: >
+        Response layout. "columns" (default) is the columnar SeriesResponse — a
+        shared `buckets` axis plus per-series value arrays (ideal for web
+        charting libraries). "rows" is the row-oriented RowsResponse — a flat
+        `rows` list of one object per (series, bucket), idiomatic for Codable
+        consumers and grouped native charts (e.g. Swift Charts).
+      schema:
+        type: string
+        enum: [columns, rows]
+        default: columns
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid Bearer JWT
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    BadRequest:
+      description: Invalid or missing query parameters, unknown field/fn, or non-climate device
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: Unknown device
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    BadGateway:
+      description: Upstream Influx query failed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+
+    Field:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Influx _field key (e.g. temperature_c).
+        unit:
+          type: string
+          description: Display unit (e.g. °C, %, hPa).
+        default_fn:
+          type: string
+          description: Default per-bucket aggregation (mean).
+      required: [name, unit, default_fn]
+
+    FieldsResponse:
+      type: object
+      properties:
+        fields:
+          type: array
+          items:
+            $ref: "#/components/schemas/Field"
+      required: [fields]
+
+    Series:
+      type: object
+      description: >
+        One line: a labelled, location-tagged set of per-bucket values (length
+        len(buckets)) plus window summary stats. A bucket with no reading is
+        null. There are no totals — climate is non-additive.
+      properties:
+        key:
+          type: string
+          description: Series identity (device id or location).
+        label:
+          type: string
+        location:
+          type: string
+        values:
+          type: array
+          items:
+            type: number
+            nullable: true
+          description: Per-bucket value (null for an empty bucket), aligned to buckets.
+        min:
+          type: number
+          nullable: true
+        max:
+          type: number
+          nullable: true
+        mean:
+          type: number
+          nullable: true
+      required: [key, label, values, min, max, mean]
+
+    SeriesResponse:
+      type: object
+      description: >
+        Columnar climate time-series: a shared bucket time axis plus per-series
+        value arrays that all align to it, with field/unit/fn metadata.
+      properties:
+        window:
+          type: string
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        interval:
+          type: string
+          enum: [5m, 15m, 30m, 1h, 6h, 1d]
+        group_by:
+          type: string
+          enum: [device, location]
+        field:
+          type: string
+        unit:
+          type: string
+        fn:
+          type: string
+          enum: [mean, min, max, last]
+        shape:
+          type: string
+          enum: [columns]
+          description: Always "columns" for this schema.
+        buckets:
+          type: array
+          items:
+            type: string
+            format: date-time
+          description: Local-timezone bucket-start axis every series aligns to.
+        series:
+          type: array
+          items:
+            $ref: "#/components/schemas/Series"
+      required: [window, from, to, interval, group_by, field, unit, fn, shape, buckets, series]
+
+    SeriesMeta:
+      type: object
+      description: Per-series metadata for the row-oriented shape (no per-bucket arrays).
+      properties:
+        key:
+          type: string
+          description: Series identity (device id or location).
+        label:
+          type: string
+        location:
+          type: string
+        min:
+          type: number
+          nullable: true
+        max:
+          type: number
+          nullable: true
+        mean:
+          type: number
+          nullable: true
+      required: [key, label, min, max, mean]
+
+    SeriesPoint:
+      type: object
+      description: One (series, bucket) sample in the row-oriented shape.
+      properties:
+        key:
+          type: string
+          description: Series identity this row belongs to.
+        time:
+          type: string
+          format: date-time
+          description: Bucket start (local timezone offset).
+        value:
+          type: number
+          nullable: true
+          description: The field value for this bucket (null when no reading).
+      required: [key, time, value]
+
+    RowsResponse:
+      type: object
+      description: >
+        Row-oriented ("tidy"/long) climate time-series: a flat list of one row
+        per (series, bucket), plus lightweight per-series metadata, with
+        field/unit/fn metadata. Rows are ordered by series then bucket time.
+      properties:
+        window:
+          type: string
+        from:
+          type: string
+          format: date-time
+        to:
+          type: string
+          format: date-time
+        interval:
+          type: string
+          enum: [5m, 15m, 30m, 1h, 6h, 1d]
+        group_by:
+          type: string
+          enum: [device, location]
+        field:
+          type: string
+        unit:
+          type: string
+        fn:
+          type: string
+          enum: [mean, min, max, last]
+        shape:
+          type: string
+          enum: [rows]
+          description: Always "rows" for this schema.
+        series:
+          type: array
+          items:
+            $ref: "#/components/schemas/SeriesMeta"
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/SeriesPoint"
+      required: [window, from, to, interval, group_by, field, unit, fn, shape, series, rows]
+
+    LatestReading:
+      type: object
+      description: One field's most-recent value for a device.
+      properties:
+        field:
+          type: string
+        unit:
+          type: string
+        value:
+          type: number
+        time:
+          type: string
+          format: date-time
+      required: [field, unit, value, time]
+
+    LatestResponse:
+      type: object
+      properties:
+        device_id:
+          type: string
+        readings:
+          type: array
+          items:
+            $ref: "#/components/schemas/LatestReading"
+      required: [device_id, readings]
+
+    DeviceCatalogEntry:
+      type: object
+      description: One climate device catalog row.
+      properties:
+        id:
+          type: string
+        display_name:
+          type: string
+        location:
+          type: string
+        class:
+          type: string
+        fields:
+          type: array
+          items:
+            type: string
+          description: Environmental fields this device reports (from config, else the registry fallback).
+      required: [id, display_name, location, class, fields]
+
+    DevicesCatalog:
+      type: object
+      properties:
+        devices:
+          type: array
+          items:
+            $ref: "#/components/schemas/DeviceCatalogEntry"
+      required: [devices]
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        version:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        started_ago:
+          type: integer
+          description: Seconds since the server started.
+        goroutines:
+          type: integer
+        influx_reachable:
+          type: boolean
+        remote_config:
+          type: object
+          description: >-
+            Per-namespace status of the most recent remote-config fetch, keyed
+            by namespace (statehouse_devices). Omitted when no remote-config
+            fetcher is wired.
+          additionalProperties:
+            type: object
+            properties:
+              ok:
+                type: boolean
+              fetched_at:
+                type: string
+                format: date-time
+              error:
+                type: string
+      required: [status, started_at, started_ago, goroutines, influx_reachable]
