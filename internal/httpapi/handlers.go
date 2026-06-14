@@ -405,7 +405,7 @@ func (s *Server) handleDeviceLatest(w http.ResponseWriter, r *http.Request) {
 		readings = append(readings, latestReading{
 			Field: row.Field,
 			Unit:  f.Unit,
-			Value: roundTo(row.Value, valueDP),
+			Value: climate.RoundValue(row.Value),
 			Time:  row.Time,
 		})
 	}

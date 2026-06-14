@@ -21,9 +21,14 @@ const (
 // environmentalClass is the device class greenhouse charts.
 const environmentalClass = "environmental_sensor"
 
-// valueDP is the decimal precision climate values are rounded to. Two places is
-// plenty for °C/%/hPa/m/s/lux/index gauges and keeps payloads tidy.
-const valueDP = 2
+// ValueDP is the decimal precision climate values are rounded to at the response
+// boundary. Two places is plenty for °C/%/hPa/m/s/lux/index gauges and keeps
+// payloads tidy. It is the single source of truth for "how greenhouse rounds";
+// the httpapi layer rounds through RoundValue rather than redeclaring it.
+const ValueDP = 2
+
+// valueDP is the unexported alias used by this package's internal rounding.
+const valueDP = ValueDP
 
 // Series is one line in a SeriesResponse: a labelled, location-tagged set of
 // per-bucket values aligned to the shared Buckets axis. Values has length
@@ -134,6 +139,12 @@ func BucketStarts(win Window, iv Interval, loc *time.Location) []time.Time {
 	}
 	return out
 }
+
+// RoundValue rounds a climate value to the standard display precision (ValueDP),
+// passing NaN/Inf through untouched so empty buckets stay gaps. It is the one
+// rounding entry point callers outside this package (e.g. httpapi) should use,
+// so precision stays in lock-step with the values AssembleSeries pre-rounds.
+func RoundValue(x float64) float64 { return roundTo(x, ValueDP) }
 
 // roundTo rounds x to n decimal places (half away from zero). NaN/Inf pass
 // through untouched so empty buckets stay gaps.
