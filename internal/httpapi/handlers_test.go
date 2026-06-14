@@ -444,6 +444,53 @@ func TestSeries_HouseGroupRejected(t *testing.T) {
 	}
 }
 
+// TestSeries_FromToOnlyValidWithCustom proves from/to are meaningful ONLY with
+// window=custom. Previously a non-custom window parsed from/to and then silently
+// discarded them, so a caller who thought they scoped the query got back an
+// unrelated range with no error — a quiet correctness/UX trap. The contract is
+// now symmetric (from/to <=> custom): the contradictory combination is a 400.
+func TestSeries_FromToOnlyValidWithCustom(t *testing.T) {
+	from := "2026-06-01T00:00:00Z"
+	to := "2026-06-02T00:00:00Z"
+
+	t.Run("week with from/to is rejected", func(t *testing.T) {
+		s, _ := dataSetup(t)
+		w := doGET(t, s, "/series?window=week&from="+from+"&to="+to)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("want 400, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("from without explicit window (defaults today) is rejected", func(t *testing.T) {
+		s, _ := dataSetup(t)
+		w := doGET(t, s, "/series?from="+from)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("want 400, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("custom with from/to still resolves to the explicit range", func(t *testing.T) {
+		s, q := dataSetup(t)
+		q.QueryFunc = func(string) ([]influx.Row, error) { return nil, nil }
+		w := doGET(t, s, "/series?window=custom&from="+from+"&to="+to)
+		if w.Code != http.StatusOK {
+			t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+		}
+		if m := decode(t, w); m["window"] != "custom" {
+			t.Errorf("window = %v, want custom", m["window"])
+		}
+	})
+
+	t.Run("today with no from/to still resolves", func(t *testing.T) {
+		s, q := dataSetup(t)
+		q.QueryFunc = func(string) ([]influx.Row, error) { return nil, nil }
+		w := doGET(t, s, "/series?window=today&interval=1h")
+		if w.Code != http.StatusOK {
+			t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+}
+
 // --- /devices/{id}/latest ---
 
 func TestDeviceLatest(t *testing.T) {

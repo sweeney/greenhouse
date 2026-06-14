@@ -38,8 +38,10 @@ requires a Bearer JWT (user **or** service token).
 
 ### Series parameters
 
-- `window` — `today` (default) \| `week` \| `month` \| `custom` (with `from`/`to`
-  RFC3339). A `custom` span over ~2 years (Influx retention) → 400.
+- `window` — `today` (default) \| `week` \| `month` \| `custom`. `from`/`to`
+  (RFC3339) are valid **only** with `custom` — required there, and a 400 for any
+  other window (they are not silently ignored). A `custom` span over ~2 years
+  (Influx retention) → 400.
 - `interval` — `5m,15m,30m,1h,6h,1d`; smart default per window, ~1000-bucket cap.
 - `field` — one of `temperature_c, humidity_pct, pressure_hpa, wind_speed_ms,
   wind_dir_deg, rainfall_mm, illuminance_lux, uv_index`. Default `temperature_c`.

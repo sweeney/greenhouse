@@ -45,6 +45,17 @@ func (s *Server) resolveWindowParams(w http.ResponseWriter, r *http.Request) (cl
 		to = t
 	}
 
+	// from/to are meaningful ONLY with window=custom. Reject the contradictory
+	// combination so a mistake surfaces as a 400 rather than silently-wrong data:
+	// without this guard a today/week/month request carrying from/to would parse
+	// them and then discard them, returning an unrelated range. This is the
+	// inverse of the custom-side strictness (custom requires from/to), making the
+	// contract symmetric: from/to <=> custom.
+	if spec != climate.WindowCustom && (!from.IsZero() || !to.IsZero()) {
+		writeError(w, http.StatusBadRequest, "'from'/'to' are only valid with window=custom")
+		return climate.Window{}, false
+	}
+
 	win, err := climate.ResolveWindow(s.clock().Now(), s.loc(), spec, from, to)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
