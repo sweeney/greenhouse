@@ -45,6 +45,17 @@ func (s *Server) resolveWindowParams(w http.ResponseWriter, r *http.Request) (cl
 		to = t
 	}
 
+	// from/to are meaningful ONLY with window=custom. Reject the contradictory
+	// combination so a mistake surfaces as a 400 rather than silently-wrong data:
+	// without this guard a today/week/month request carrying from/to would parse
+	// them and then discard them, returning an unrelated range. This is the
+	// inverse of the custom-side strictness (custom requires from/to), making the
+	// contract symmetric: from/to <=> custom.
+	if spec != climate.WindowCustom && (!from.IsZero() || !to.IsZero()) {
+		writeError(w, http.StatusBadRequest, "'from'/'to' are only valid with window=custom")
+		return climate.Window{}, false
+	}
+
 	win, err := climate.ResolveWindow(s.clock().Now(), s.loc(), spec, from, to)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -78,16 +89,24 @@ func (s *Server) resolveFieldFn(w http.ResponseWriter, r *http.Request) (field, 
 	if field == "" {
 		field = climate.DefaultField
 	}
-	if _, known := climate.FieldFor(field); !known {
+	f, known := climate.FieldFor(field)
+	if !known {
 		writeError(w, http.StatusBadRequest, "unknown 'field': "+field)
 		return "", "", false
 	}
 	fn = q.Get("fn")
 	if fn == "" {
-		fn = climate.DefaultFn
+		// Default to the field's own aggregation, not the global mean: circular
+		// fields (wind_dir_deg) default to last, which mean would 400 on.
+		fn = f.DefaultFn
 	}
-	if !climate.ValidFn(fn) {
-		writeError(w, http.StatusBadRequest, "invalid 'fn' (want one of mean, min, max, last)")
+	if !climate.ValidFnForField(f, fn) {
+		if f.Circular {
+			writeError(w, http.StatusBadRequest,
+				"invalid 'fn' for circular field "+field+": only 'last' is valid (arithmetic mean/min/max are wrong for a 0–360° bearing)")
+		} else {
+			writeError(w, http.StatusBadRequest, "invalid 'fn' (want one of mean, min, max, last)")
+		}
 		return "", "", false
 	}
 	return field, fn, true
@@ -386,7 +405,7 @@ func (s *Server) handleDeviceLatest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	flux := influx.BuildLatestFlux(s.Bucket, id)
+	flux := influx.BuildLatestFlux(s.Bucket, id, influx.DefaultLatestLookback)
 	rows, err := s.Influx.Query(r.Context(), flux)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "influx query failed: "+err.Error())
@@ -405,7 +424,7 @@ func (s *Server) handleDeviceLatest(w http.ResponseWriter, r *http.Request) {
 		readings = append(readings, latestReading{
 			Field: row.Field,
 			Unit:  f.Unit,
-			Value: roundTo(row.Value, valueDP),
+			Value: climate.RoundValue(row.Value),
 			Time:  row.Time,
 		})
 	}

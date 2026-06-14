@@ -33,18 +33,23 @@ requires a Bearer JWT (user **or** service token).
 | `GET /devices` | climate device catalog (class `environmental_sensor`): id, display_name, location, class, and a `fields` hint |
 | `GET /devices/{id}/series` | single-device, single-field time-series |
 | `GET /series` | multi-series; `group_by` device (default) or location (mean per room) |
-| `GET /devices/{id}/latest` | the device's most recent reading across its fields |
+| `GET /devices/{id}/latest` | the device's most recent reading across its fields (within the last 7 days) |
 | `GET /fields` | the field registry (name, unit, default fn) |
 
 ### Series parameters
 
-- `window` — `today` (default) \| `week` \| `month` \| `custom` (with `from`/`to` RFC3339).
+- `window` — `today` (default) \| `week` \| `month` \| `custom`. `from`/`to`
+  (RFC3339) are valid **only** with `custom` — required there, and a 400 for any
+  other window (they are not silently ignored). A `custom` span over ~2 years
+  (Influx retention) → 400.
 - `interval` — `5m,15m,30m,1h,6h,1d`; smart default per window, ~1000-bucket cap.
 - `field` — one of `temperature_c, humidity_pct, pressure_hpa, wind_speed_ms,
   wind_dir_deg, rainfall_mm, illuminance_lux, uv_index`. Default `temperature_c`.
   Unknown field → 400.
 - `fn` — `mean` (default) \| `min` \| `max` \| `last`. `sum` is deliberately not
-  offered (non-additive). Bad fn → 400.
+  offered (non-additive). Bad fn → 400. `wind_dir_deg` is **circular** (a 0–360°
+  bearing): arithmetic mean/min/max are wrong on an angular axis, so it accepts
+  only `last` (and defaults to it); `mean`/`min`/`max` for it → 400.
 - `group_by` — `device` (default) \| `location`. Bad value → 400.
 - `devices` — (`/series` only) CSV of device ids to chart, e.g.
   `devices=climate_groundfloor,climate_firstfloor`. Restricts the series to those
@@ -66,10 +71,16 @@ Influx; the registry is a safe superset for building a picker).
 Local YAML (`/etc/greenhouse/config.yaml`, see `config/config.example.yaml`):
 `http.listen`, `influx{url,org,bucket,token_file}`,
 `identity{base_url,client_id,client_secret}`, `remote_config.base_url`,
-`house.timezone`. Device inventory is fetched from the remote config service
+`house.timezone`, `auth.allow_insecure`. Device inventory is fetched from the remote config service
 (`statehouse_devices` namespace only — **no** tariffs). Fetches are fail-open
 (log + keep last-known) with SIGHUP reload. Greenhouse needs its own Influx
 **read token** (statehouse bucket) and `client_id`/`secret` in id.swee.net.
+
+**Secure by default:** inbound auth is disabled only when `identity.base_url` is
+empty (local dev/tests), and that path is loud — a startup warning is logged and
+`/healthz` reports `"auth":"disabled"`. To actually boot unauthenticated you must
+set `auth.allow_insecure: true`; otherwise greenhouse refuses to start, so a
+missing/typo'd `identity.base_url` can't silently expose the data API.
 
 ## Development
 

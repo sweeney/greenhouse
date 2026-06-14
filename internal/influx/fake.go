@@ -2,6 +2,7 @@ package influx
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -13,9 +14,11 @@ import (
 // Resolution order for Query:
 //  1. If Err is set, it is returned.
 //  2. If QueryFunc is set, it is called (full control of rows/error).
-//  3. Otherwise the flux is matched against Responses: the value of the first
-//     key found as a substring of the flux is returned. A convenient key is a
-//     device_id, since the builders embed the device set `["<id>"]`.
+//  3. Otherwise the flux is matched against Responses: the value of the
+//     LONGEST key found as a substring of the flux is returned (ties broken
+//     lexicographically), so resolution is DETERMINISTIC even when several keys
+//     match. A convenient key is a device_id, since the builders embed the
+//     device set `["<id>"]`.
 //  4. No match → nil rows, nil error (empty result).
 type FakeQuerier struct {
 	mu sync.Mutex
@@ -47,9 +50,22 @@ func (f *FakeQuerier) Query(_ context.Context, flux string) ([]Row, error) {
 	if f.QueryFunc != nil {
 		return f.QueryFunc(flux)
 	}
-	for key, rows := range f.Responses {
-		if strings.Contains(flux, key) {
-			return rows, nil
+	// Resolve deterministically: longest matching key wins; ties broken
+	// lexicographically. Iterating the map directly would be non-deterministic
+	// (Go randomizes map order), making overlapping keys a coin flip per run.
+	keys := make([]string, 0, len(f.Responses))
+	for k := range f.Responses {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if len(keys[i]) != len(keys[j]) {
+			return len(keys[i]) > len(keys[j]) // longest first
+		}
+		return keys[i] < keys[j] // stable tie-break
+	})
+	for _, k := range keys {
+		if strings.Contains(flux, k) {
+			return f.Responses[k], nil
 		}
 	}
 	return nil, nil

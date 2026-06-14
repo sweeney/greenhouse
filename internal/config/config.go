@@ -19,6 +19,7 @@ type Config struct {
 	Identity     IdentityConfig     `yaml:"identity"`
 	RemoteConfig RemoteConfigConfig `yaml:"remote_config"`
 	House        HouseConfig        `yaml:"house"`
+	Auth         AuthConfig         `yaml:"auth"`
 }
 
 // HTTPConfig describes the HTTP listener.
@@ -50,6 +51,15 @@ type IdentityConfig struct {
 // RemoteConfigConfig holds the address of the remote config service.
 type RemoteConfigConfig struct {
 	BaseURL string `yaml:"base_url"`
+}
+
+// AuthConfig governs the secure-by-default boundary. Inbound auth is disabled
+// only when identity.base_url is empty (local dev/tests). AllowInsecure is the
+// explicit opt-in required to BOOT in that unauthenticated state: it must be set
+// to run without auth, so a missing/typo'd identity.base_url in production
+// refuses to start rather than silently serving the data API publicly.
+type AuthConfig struct {
+	AllowInsecure bool `yaml:"allow_insecure"`
 }
 
 // HouseConfig holds house-wide settings.

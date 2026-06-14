@@ -27,3 +27,10 @@ remote_config:
 
 house:
   timezone: "Europe/London"
+
+auth:
+  # Inbound auth is disabled only when identity.base_url is empty. To boot in
+  # that unauthenticated state you MUST opt in here — otherwise greenhouse
+  # refuses to start, so a missing/typo'd identity.base_url can't silently
+  # serve the data API publicly. Leave false in production.
+  allow_insecure: false

@@ -188,8 +188,14 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		StartedAt       time.Time                         `json:"started_at"`
 		StartedAgo      int                               `json:"started_ago"`
 		Goroutines      int                               `json:"goroutines"`
+		Auth            string                            `json:"auth"`
 		InfluxReachable bool                              `json:"influx_reachable"`
 		RemoteConfig    map[string]config.NamespaceStatus `json:"remote_config,omitempty"`
+	}
+	// auth posture so monitoring can alert on an unauthenticated data API.
+	authStatus := "enabled"
+	if s.IdentityURL == "" {
+		authStatus = "disabled"
 	}
 	h := health{
 		Status:     "ok",
@@ -197,6 +203,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		StartedAt:  s.started,
 		StartedAgo: int((time.Since(s.started) + 500*time.Millisecond) / time.Second),
 		Goroutines: runtime.NumGoroutine(),
+		Auth:       authStatus,
 	}
 	if s.Influx != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)

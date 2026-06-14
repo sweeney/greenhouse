@@ -41,6 +41,13 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Secure-by-default: refuse to boot unauthenticated unless explicitly opted
+	// in via auth.allow_insecure.
+	if err := validateBootConfig(cfg); err != nil {
+		logger.Error("refusing to start", "error", err)
+		os.Exit(1)
+	}
+
 	// Build the outbound client_credentials token source and the remote-config
 	// fetcher. The fetcher HOLDS the live device snapshot that the HTTP handlers
 	// query, so we always construct it (even when remote_config.base_url is

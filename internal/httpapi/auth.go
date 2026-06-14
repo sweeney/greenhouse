@@ -12,6 +12,10 @@ import (
 // existing tests and local runs work without auth configured.
 func (s *Server) authMiddleware() func(http.Handler) http.Handler {
 	if s.IdentityURL == "" {
+		if s.Logger != nil {
+			s.Logger.Warn("AUTH DISABLED: identity.base_url is empty — all data routes are PUBLIC; " +
+				"set identity.base_url, or auth.allow_insecure to acknowledge running without auth")
+		}
 		return func(h http.Handler) http.Handler { return h }
 	}
 	verifier, err := auth.NewJWKSVerifier(auth.JWKSVerifierConfig{

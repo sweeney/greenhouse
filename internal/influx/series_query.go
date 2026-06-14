@@ -43,18 +43,28 @@ from(bucket: %q)
 	)
 }
 
+// DefaultLatestLookback bounds how far GET /devices/{id}/latest looks back for a
+// device's most recent reading. It must comfortably exceed the slowest real
+// reporter's interval so an infrequent device still returns; 7 days does, while
+// keeping the scan cost recency-proportional rather than retention-proportional.
+// A device silent for longer than this is itself a staleness signal.
+const DefaultLatestLookback = "7d"
+
 // BuildLatestFlux builds the "most recent reading across all fields" query for a
 // single device, used by GET /devices/{id}/latest. last() per field collapses
 // each field's series to its newest point; group(columns:["_field"]) keeps the
-// fields separate so the row carries each field's _field/_value/_time. The range
-// reaches back far enough (Unix epoch) that a device reporting infrequently
-// still yields its latest value.
-func BuildLatestFlux(bucket, deviceID string) string {
+// fields separate so the row carries each field's _field/_value/_time.
+//
+// lookback bounds the range (e.g. "7d") so Influx can prune by time: the cost
+// scales with recency, not with the bucket's ~2-year retention. Ranging from
+// the Unix epoch (the previous behaviour) forced a whole-history scan per call
+// on an endpoint explicitly meant to be polled by dashboards.
+func BuildLatestFlux(bucket, deviceID, lookback string) string {
 	return fmt.Sprintf(`from(bucket: %q)
-  |> range(start: 1970-01-01T00:00:00Z)
+  |> range(start: -%s)
   |> filter(fn: (r) => r._measurement == "device_environment")
   |> filter(fn: (r) => r.device_id == %q)
   |> group(columns: ["_field"])
   |> last()`,
-		bucket, deviceID)
+		bucket, lookback, deviceID)
 }

@@ -9,10 +9,17 @@ import "sort"
 // Climate fields are plain gauge readings, so the default aggregation is mean
 // (never sum — climate is NON-additive). min/max/last are also offered for
 // "coldest in the bucket", "peak gust", "latest reading", etc.
+//
+// Circular marks an angular 0–360° quantity (wind direction). Arithmetic
+// mean/min/max are mathematically wrong on a circular axis — mean(350°, 10°) is
+// 180° (South) when the true average is 0° (North) — so circular fields permit
+// only last (a single instantaneous bearing is always valid) until proper
+// vector averaging lands.
 type Field struct {
 	Name      string `json:"name"`
 	Unit      string `json:"unit"`
 	DefaultFn string `json:"default_fn"`
+	Circular  bool   `json:"circular,omitempty"`
 }
 
 // DefaultField is the field used when a series request omits ?field=.
@@ -25,7 +32,7 @@ var fields = map[string]Field{
 	"humidity_pct":    {Name: "humidity_pct", Unit: "%", DefaultFn: "mean"},
 	"pressure_hpa":    {Name: "pressure_hpa", Unit: "hPa", DefaultFn: "mean"},
 	"wind_speed_ms":   {Name: "wind_speed_ms", Unit: "m/s", DefaultFn: "mean"},
-	"wind_dir_deg":    {Name: "wind_dir_deg", Unit: "°", DefaultFn: "mean"},
+	"wind_dir_deg":    {Name: "wind_dir_deg", Unit: "°", DefaultFn: "last", Circular: true},
 	"rainfall_mm":     {Name: "rainfall_mm", Unit: "mm", DefaultFn: "mean"},
 	"illuminance_lux": {Name: "illuminance_lux", Unit: "lux", DefaultFn: "mean"},
 	"uv_index":        {Name: "uv_index", Unit: "index", DefaultFn: "mean"},
@@ -54,6 +61,19 @@ func FieldFor(name string) (Field, bool) {
 func ValidFn(fn string) bool {
 	_, ok := allowedFns[fn]
 	return ok
+}
+
+// ValidFnForField reports whether fn is permitted for a specific field. For
+// circular fields (wind direction) only last is meaningful: the linear
+// aggregations (mean/min/max) are rejected because they are mathematically
+// wrong on a 0–360° axis, so the API never emits a confident-but-wrong bearing.
+// For every other field it is exactly ValidFn (climate-wide "never sum" still
+// holds for every gauge). Callers should validate with this rather than ValidFn.
+func ValidFnForField(field Field, fn string) bool {
+	if field.Circular {
+		return fn == "last"
+	}
+	return ValidFn(fn)
 }
 
 // AllowedFns returns the allowed aggregation functions, sorted for stable
