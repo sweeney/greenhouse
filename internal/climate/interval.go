@@ -114,7 +114,7 @@ func ResolveInterval(win Window, requested string, loc *time.Location) (Interval
 		return Interval{}, fmt.Errorf("climate: interval %q not allowed; choose one of %v", requested, AllowedIntervals())
 	}
 
-	n := bucketCount(win, iv, loc)
+	n := countBuckets(win, iv, loc)
 	if n > MaxBuckets {
 		coarser := suggestCoarser(win, loc)
 		return Interval{}, fmt.Errorf("climate: interval %q yields %d buckets over the window, exceeding the cap of %d; request a coarser interval (e.g. %q)", token, n, MaxBuckets, coarser)
@@ -128,18 +128,63 @@ func ResolveInterval(win Window, requested string, loc *time.Location) (Interval
 // over (it never is for realistic windows).
 func suggestCoarser(win Window, loc *time.Location) string {
 	for _, iv := range intervals {
-		if bucketCount(win, iv, loc) <= MaxBuckets {
+		if countBuckets(win, iv, loc) <= MaxBuckets {
 			return iv.Token
 		}
 	}
 	return intervals[len(intervals)-1].Token
 }
 
-// bucketCount returns how many buckets the canonical axis would have for win at
-// iv. It shares the exact stepping logic of BucketStarts so the cap check and
-// the axis can never disagree.
-func bucketCount(win Window, iv Interval, loc *time.Location) int {
-	return len(BucketStarts(win, iv, loc))
+// countBuckets returns how many canonical buckets win has at iv, but never
+// materializes the axis: it is a cheap guard for ResolveInterval, not an axis
+// builder. For counts <= MaxBuckets it MUST agree exactly with
+// len(BucketStarts(win, iv, loc)).
+//
+// Why this exists: building the full axis just to take its length (the old
+// bucketCount) let a caller-controlled custom window force ~21M time.Time
+// allocations and ~10s of CPU before the cap rejected it — an authenticated
+// CPU/memory DoS. Counting cheaply means the cap is checked before anything
+// large is allocated; BucketStarts is only ever called once the count is known
+// to be in-cap.
+//
+//   - Fixed (sub-day) intervals: exact O(1) arithmetic — ceil(span/Duration),
+//     computed with a modulo so a clamped/huge span cannot overflow.
+//   - Calendar (1d) intervals: step by local date like BucketStarts, but stop
+//     the moment the count passes MaxBuckets so an absurd span can't walk
+//     centuries.
+func countBuckets(win Window, iv Interval, loc *time.Location) int {
+	if loc == nil {
+		loc = time.UTC
+	}
+	if !win.Stop.After(win.Start) {
+		return 0
+	}
+
+	if !iv.Calendar {
+		// Fixed step: ceil(span/Duration). time.Time.Sub clamps an enormous
+		// range to the max Duration, so avoid the (span+Duration-1) form that
+		// would overflow and compute ceil via a modulo instead.
+		span := win.Stop.Sub(win.Start)
+		n := span / iv.Duration
+		if span%iv.Duration != 0 {
+			n++
+		}
+		return int(n)
+	}
+
+	// Calendar: step by local date, anchored at the local midnight of the start
+	// date, exactly as BucketStarts does — but bail out once over the cap.
+	start := win.Start.In(loc)
+	cur := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, loc)
+	n := 0
+	for cur.Before(win.Stop) {
+		n++
+		if n > MaxBuckets {
+			return n // enough to fail the cap; don't keep walking
+		}
+		cur = time.Date(cur.Year(), cur.Month(), cur.Day()+1, 0, 0, 0, 0, loc)
+	}
+	return n
 }
 
 // sortedTokens is a stable helper for any caller that wants the allowed tokens

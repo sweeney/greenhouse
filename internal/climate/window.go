@@ -13,6 +13,14 @@ const (
 	WindowCustom = "custom"
 )
 
+// MaxCustomWindow caps the span of a custom window. The caller controls
+// from/to with no inherent limit, so an absurd range (e.g. 200 years) is
+// rejected here with an intelligible message before any interval/bucket logic
+// runs — defense in depth alongside the O(1) bucket-count cap. ~2 years matches
+// the statehouse bucket's Influx retention, beyond which there is no data to
+// query anyway.
+const MaxCustomWindow = 2 * 366 * 24 * time.Hour
+
 // Window is a resolved, half-open time range [Start, Stop). Label records which
 // spec produced it ("today"/"week"/"month"/"custom").
 //
@@ -78,6 +86,9 @@ func ResolveWindow(now time.Time, loc *time.Location, spec string, from, to time
 		}
 		if !to.After(from) {
 			return Window{}, fmt.Errorf("climate: custom window to (%s) must be after from (%s)", to, from)
+		}
+		if to.Sub(from) > MaxCustomWindow {
+			return Window{}, fmt.Errorf("climate: custom window span %s exceeds the maximum of %s", to.Sub(from), MaxCustomWindow)
 		}
 		return Window{Start: from, Stop: to, Label: WindowCustom}, nil
 

@@ -228,7 +228,10 @@ components:
       name: from
       in: query
       required: false
-      description: Custom window start (RFC3339). Required when window=custom.
+      description: >
+        Custom window start (RFC3339). Required when window=custom. The custom
+        span (to - from) may not exceed ~2 years (matching Influx retention); a
+        larger span returns 400.
       schema:
         type: string
         format: date-time
@@ -236,7 +239,10 @@ components:
       name: to
       in: query
       required: false
-      description: Custom window end (RFC3339). Required when window=custom.
+      description: >
+        Custom window end (RFC3339). Required when window=custom. The custom
+        span (to - from) may not exceed ~2 years (matching Influx retention); a
+        larger span returns 400.
       schema:
         type: string
         format: date-time
