@@ -634,6 +634,13 @@ components:
           description: Seconds since the server started.
         goroutines:
           type: integer
+        auth:
+          type: string
+          enum: [enabled, disabled]
+          description: >
+            Inbound auth posture. "disabled" means identity.base_url is empty and
+            the data API is served unauthenticated (dev, or a misconfiguration) —
+            monitoring should alert on it in production.
         influx_reachable:
           type: boolean
         remote_config:
@@ -652,4 +659,4 @@ components:
                 format: date-time
               error:
                 type: string
-      required: [status, started_at, started_ago, goroutines, influx_reachable]
+      required: [status, started_at, started_ago, goroutines, auth, influx_reachable]

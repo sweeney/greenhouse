@@ -25,6 +25,29 @@ func TestDefault(t *testing.T) {
 	}
 }
 
+func TestLoadAuthAllowInsecure(t *testing.T) {
+	dir := t.TempDir()
+	p := writeFile(t, dir, "config.yaml", `
+identity:
+  base_url: ""
+auth:
+  allow_insecure: true
+`)
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Auth.AllowInsecure {
+		t.Error("auth.allow_insecure should parse to true")
+	}
+}
+
+func TestDefaultAuthIsSecure(t *testing.T) {
+	if Default().Auth.AllowInsecure {
+		t.Error("auth.allow_insecure must default to false (secure by default)")
+	}
+}
+
 func writeFile(t *testing.T, dir, name, content string) string {
 	t.Helper()
 	p := filepath.Join(dir, name)

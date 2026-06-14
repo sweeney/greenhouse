@@ -1,14 +1,17 @@
 package httpapi
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"log/slog"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -201,5 +204,46 @@ func TestAuth_Disabled_Passthrough(t *testing.T) {
 	h := s.authMiddleware()(dummy)
 	if w := doAuth(h, ""); w.Code != http.StatusOK {
 		t.Fatalf("auth disabled should pass through; want 200, got %d", w.Code)
+	}
+}
+
+// TestAuth_Disabled_LogsWarning asserts that disabling auth (empty IdentityURL)
+// is LOUD, never a silent accident: authMiddleware must emit a prominent warning
+// so an operator who mis-configured identity.base_url sees it at startup.
+func TestAuth_Disabled_LogsWarning(t *testing.T) {
+	var buf bytes.Buffer
+	s := setup(t) // IdentityURL == ""
+	s.Logger = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn}))
+
+	_ = s.authMiddleware()
+
+	if !strings.Contains(buf.String(), "AUTH DISABLED") {
+		t.Errorf("expected an AUTH DISABLED warning when identity.base_url is empty; got %q", buf.String())
+	}
+}
+
+// TestHealth_ReportsAuthStatus surfaces the auth posture on /healthz so
+// monitoring can alert when the data API is running unauthenticated.
+func TestHealth_ReportsAuthStatus(t *testing.T) {
+	authOf := func(s *Server) string {
+		w := httptest.NewRecorder()
+		s.handleHealth(w, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+		var h struct {
+			Auth string `json:"auth"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &h); err != nil {
+			t.Fatalf("decode health: %v", err)
+		}
+		return h.Auth
+	}
+
+	if got := authOf(setup(t)); got != "disabled" {
+		t.Errorf("auth status with empty IdentityURL = %q, want disabled", got)
+	}
+
+	s := setup(t)
+	s.IdentityURL = "https://id.example"
+	if got := authOf(s); got != "enabled" {
+		t.Errorf("auth status with IdentityURL set = %q, want enabled", got)
 	}
 }

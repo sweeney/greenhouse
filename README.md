@@ -71,10 +71,16 @@ Influx; the registry is a safe superset for building a picker).
 Local YAML (`/etc/greenhouse/config.yaml`, see `config/config.example.yaml`):
 `http.listen`, `influx{url,org,bucket,token_file}`,
 `identity{base_url,client_id,client_secret}`, `remote_config.base_url`,
-`house.timezone`. Device inventory is fetched from the remote config service
+`house.timezone`, `auth.allow_insecure`. Device inventory is fetched from the remote config service
 (`statehouse_devices` namespace only — **no** tariffs). Fetches are fail-open
 (log + keep last-known) with SIGHUP reload. Greenhouse needs its own Influx
 **read token** (statehouse bucket) and `client_id`/`secret` in id.swee.net.
+
+**Secure by default:** inbound auth is disabled only when `identity.base_url` is
+empty (local dev/tests), and that path is loud — a startup warning is logged and
+`/healthz` reports `"auth":"disabled"`. To actually boot unauthenticated you must
+set `auth.allow_insecure: true`; otherwise greenhouse refuses to start, so a
+missing/typo'd `identity.base_url` can't silently expose the data API.
 
 ## Development
 
