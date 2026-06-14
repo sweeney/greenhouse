@@ -386,7 +386,7 @@ func (s *Server) handleDeviceLatest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	flux := influx.BuildLatestFlux(s.Bucket, id)
+	flux := influx.BuildLatestFlux(s.Bucket, id, influx.DefaultLatestLookback)
 	rows, err := s.Influx.Query(r.Context(), flux)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "influx query failed: "+err.Error())

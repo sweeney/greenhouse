@@ -166,8 +166,9 @@ paths:
       summary: Device latest reading
       description: >
         The device's most recent reading across all the fields it reports, for
-        dashboards. Only registered fields are surfaced. Non-climate devices
-        return 400.
+        dashboards. Only registered fields are surfaced. Looks back over the last
+        7 days (a device silent longer than that returns no reading for the
+        field). Non-climate devices return 400.
       operationId: getDeviceLatest
       tags: [data]
       parameters:

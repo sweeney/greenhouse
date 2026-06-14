@@ -33,7 +33,7 @@ requires a Bearer JWT (user **or** service token).
 | `GET /devices` | climate device catalog (class `environmental_sensor`): id, display_name, location, class, and a `fields` hint |
 | `GET /devices/{id}/series` | single-device, single-field time-series |
 | `GET /series` | multi-series; `group_by` device (default) or location (mean per room) |
-| `GET /devices/{id}/latest` | the device's most recent reading across its fields |
+| `GET /devices/{id}/latest` | the device's most recent reading across its fields (within the last 7 days) |
 | `GET /fields` | the field registry (name, unit, default fn) |
 
 ### Series parameters

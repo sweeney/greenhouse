@@ -77,9 +77,10 @@ func TestBuildFieldSeriesFlux_FieldAndFnParameterised(t *testing.T) {
 }
 
 func TestBuildLatestFlux(t *testing.T) {
-	flux := BuildLatestFlux("statehouse", "climate_weatherstation")
+	flux := BuildLatestFlux("statehouse", "climate_weatherstation", "7d")
 	wants := []string{
 		`from(bucket: "statehouse")`,
+		`range(start: -7d)`,
 		`r._measurement == "device_environment"`,
 		`r.device_id == "climate_weatherstation"`,
 		`group(columns: ["_field"])`,
@@ -89,6 +90,20 @@ func TestBuildLatestFlux(t *testing.T) {
 		if !strings.Contains(flux, w) {
 			t.Errorf("latest flux missing %q\n---\n%s", w, flux)
 		}
+	}
+}
+
+// TestBuildLatestFlux_BoundedRange pins the performance fix: the latest query
+// must NOT scan the device's whole history from the Unix epoch. An unbounded
+// range defeats time-pruning and makes the scan cost scale with the 2-year
+// retention instead of with recency, on a dashboard-polled endpoint.
+func TestBuildLatestFlux_BoundedRange(t *testing.T) {
+	flux := BuildLatestFlux("statehouse", "d", DefaultLatestLookback)
+	if strings.Contains(flux, "1970-01-01") {
+		t.Errorf("latest flux must not range from the Unix epoch:\n%s", flux)
+	}
+	if !strings.Contains(flux, "range(start: -"+DefaultLatestLookback+")") {
+		t.Errorf("latest flux should use a bounded lookback range(start: -%s):\n%s", DefaultLatestLookback, flux)
 	}
 }
 
