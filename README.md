@@ -47,7 +47,9 @@ requires a Bearer JWT (user **or** service token).
   wind_dir_deg, rainfall_mm, illuminance_lux, uv_index`. Default `temperature_c`.
   Unknown field → 400.
 - `fn` — `mean` (default) \| `min` \| `max` \| `last`. `sum` is deliberately not
-  offered (non-additive). Bad fn → 400.
+  offered (non-additive). Bad fn → 400. `wind_dir_deg` is **circular** (a 0–360°
+  bearing): arithmetic mean/min/max are wrong on an angular axis, so it accepts
+  only `last` (and defaults to it); `mean`/`min`/`max` for it → 400.
 - `group_by` — `device` (default) \| `location`. Bad value → 400.
 - `devices` — (`/series` only) CSV of device ids to chart, e.g.
   `devices=climate_groundfloor,climate_firstfloor`. Restricts the series to those

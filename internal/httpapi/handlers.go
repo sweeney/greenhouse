@@ -89,16 +89,24 @@ func (s *Server) resolveFieldFn(w http.ResponseWriter, r *http.Request) (field, 
 	if field == "" {
 		field = climate.DefaultField
 	}
-	if _, known := climate.FieldFor(field); !known {
+	f, known := climate.FieldFor(field)
+	if !known {
 		writeError(w, http.StatusBadRequest, "unknown 'field': "+field)
 		return "", "", false
 	}
 	fn = q.Get("fn")
 	if fn == "" {
-		fn = climate.DefaultFn
+		// Default to the field's own aggregation, not the global mean: circular
+		// fields (wind_dir_deg) default to last, which mean would 400 on.
+		fn = f.DefaultFn
 	}
-	if !climate.ValidFn(fn) {
-		writeError(w, http.StatusBadRequest, "invalid 'fn' (want one of mean, min, max, last)")
+	if !climate.ValidFnForField(f, fn) {
+		if f.Circular {
+			writeError(w, http.StatusBadRequest,
+				"invalid 'fn' for circular field "+field+": only 'last' is valid (arithmetic mean/min/max are wrong for a 0–360° bearing)")
+		} else {
+			writeError(w, http.StatusBadRequest, "invalid 'fn' (want one of mean, min, max, last)")
+		}
 		return "", "", false
 	}
 	return field, fn, true

@@ -158,10 +158,20 @@ func TestFields(t *testing.T) {
 		t.Fatalf("want 8 fields, got %d", len(resp.Fields))
 	}
 	byName := map[string]string{}
+	byFn := map[string]string{}
 	for _, f := range resp.Fields {
 		byName[f.Name] = f.Unit
-		if f.DefaultFn != "mean" {
-			t.Errorf("%s default_fn = %q, want mean", f.Name, f.DefaultFn)
+		byFn[f.Name] = f.DefaultFn
+	}
+	// Every gauge defaults to mean except the circular bearing, which defaults
+	// to last (arithmetic mean of angles is wrong).
+	for name, fn := range byFn {
+		want := "mean"
+		if name == "wind_dir_deg" {
+			want = "last"
+		}
+		if fn != want {
+			t.Errorf("%s default_fn = %q, want %q", name, fn, want)
 		}
 	}
 	if byName["temperature_c"] != "°C" {
@@ -267,6 +277,31 @@ func TestDeviceSeries_InfluxError(t *testing.T) {
 	w := doGET(t, s, "/devices/climate_basement/series")
 	if w.Code != http.StatusBadGateway {
 		t.Fatalf("want 502, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// TestDeviceSeries_WindDirCircular proves the circular-field contract end to
+// end: the linear aggregations (mean/min/max) are rejected for wind_dir_deg so
+// the API never emits an arithmetic-mean-of-angles bearing, and an unqualified
+// request defaults to last (the field's own DefaultFn) rather than the global
+// mean, so it resolves instead of 400ing.
+func TestDeviceSeries_WindDirCircular(t *testing.T) {
+	for _, fn := range []string{"mean", "min", "max"} {
+		s, _ := dataSetup(t)
+		w := doGET(t, s, "/devices/climate_weatherstation/series?field=wind_dir_deg&fn="+fn)
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("fn=%s on circular field: want 400, got %d: %s", fn, w.Code, w.Body.String())
+		}
+	}
+
+	s, q := dataSetup(t)
+	q.QueryFunc = func(string) ([]influx.Row, error) { return nil, nil }
+	w := doGET(t, s, "/devices/climate_weatherstation/series?field=wind_dir_deg&window=today&interval=1h")
+	if w.Code != http.StatusOK {
+		t.Fatalf("default wind_dir_deg request should resolve, got %d: %s", w.Code, w.Body.String())
+	}
+	if m := decode(t, w); m["fn"] != "last" {
+		t.Errorf("wind_dir_deg default fn = %v, want last", m["fn"])
 	}
 }
 

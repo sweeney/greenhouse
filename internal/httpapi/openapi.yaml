@@ -276,12 +276,14 @@ components:
       in: query
       required: false
       description: >
-        Per-bucket aggregation. Defaults to mean. Climate is non-additive, so
-        sum is deliberately not offered.
+        Per-bucket aggregation. Defaults to the field's default_fn (mean for
+        ordinary gauges). Climate is non-additive, so sum is deliberately not
+        offered. Circular fields (wind_dir_deg, a 0–360° bearing) accept ONLY
+        last — arithmetic mean/min/max are mathematically wrong on an angular
+        axis — and default to last; requesting mean/min/max for them returns 400.
       schema:
         type: string
         enum: [mean, min, max, last]
-        default: mean
     GroupBy:
       name: group_by
       in: query
@@ -387,7 +389,15 @@ components:
           description: Display unit (e.g. °C, %, hPa).
         default_fn:
           type: string
-          description: Default per-bucket aggregation (mean).
+          description: >
+            Default per-bucket aggregation (mean for ordinary gauges; last for
+            circular fields like wind_dir_deg).
+        circular:
+          type: boolean
+          description: >
+            True for angular 0–360° quantities (wind direction). Circular fields
+            accept only fn=last; arithmetic mean/min/max are wrong on an angular
+            axis. Omitted (false) for ordinary gauges.
       required: [name, unit, default_fn]
 
     FieldsResponse:
