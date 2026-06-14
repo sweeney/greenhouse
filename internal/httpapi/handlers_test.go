@@ -322,6 +322,112 @@ func TestSeries_GroupByLocationMean(t *testing.T) {
 	}
 }
 
+// seriesKeys extracts the series keys from a columnar series response.
+func seriesKeys(t *testing.T, w *httptest.ResponseRecorder) []string {
+	t.Helper()
+	var resp struct {
+		Series []struct {
+			Key string `json:"key"`
+		} `json:"series"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	keys := make([]string, len(resp.Series))
+	for i, s := range resp.Series {
+		keys[i] = s.Key
+	}
+	return keys
+}
+
+func TestSeries_NoFilterAllClimate(t *testing.T) {
+	s, q := dataSetup(t)
+	q.QueryFunc = func(flux string) ([]influx.Row, error) { return nil, nil }
+	w := doGET(t, s, "/series?window=today&interval=1h")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	// Both climate devices present; non-climate winefridge excluded.
+	keys := seriesKeys(t, w)
+	if len(keys) != 2 {
+		t.Fatalf("want 2 climate series, got %d: %v", len(keys), keys)
+	}
+}
+
+func TestSeries_DevicesFilter(t *testing.T) {
+	s, q := dataSetup(t)
+	q.QueryFunc = func(flux string) ([]influx.Row, error) {
+		return bucketRows(t, s, "climate_basement", "today", "1h", 19), nil
+	}
+	w := doGET(t, s, "/series?window=today&interval=1h&devices=climate_basement")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	keys := seriesKeys(t, w)
+	if len(keys) != 1 || keys[0] != "climate_basement" {
+		t.Fatalf("want only climate_basement, got %v", keys)
+	}
+}
+
+func TestSeries_LocationsFilter(t *testing.T) {
+	s, q := dataSetup(t)
+	q.QueryFunc = func(flux string) ([]influx.Row, error) {
+		return bucketRows(t, s, "climate_weatherstation", "today", "1h", 15), nil
+	}
+	w := doGET(t, s, "/series?window=today&interval=1h&locations=garden")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	keys := seriesKeys(t, w)
+	if len(keys) != 1 || keys[0] != "climate_weatherstation" {
+		t.Fatalf("want only climate_weatherstation (garden), got %v", keys)
+	}
+}
+
+func TestSeries_FiltersComposeAND(t *testing.T) {
+	s, q := dataSetup(t)
+	q.QueryFunc = func(flux string) ([]influx.Row, error) {
+		return bucketRows(t, s, "climate_weatherstation", "today", "1h", 15), nil
+	}
+	// Both climate devices requested, but only the garden one survives the
+	// location filter — devices= and locations= compose as AND.
+	w := doGET(t, s, "/series?window=today&interval=1h&devices=climate_basement,climate_weatherstation&locations=garden")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	keys := seriesKeys(t, w)
+	if len(keys) != 1 || keys[0] != "climate_weatherstation" {
+		t.Fatalf("want only climate_weatherstation, got %v", keys)
+	}
+}
+
+func TestSeries_UnknownDeviceFilter(t *testing.T) {
+	s, _ := dataSetup(t)
+	w := doGET(t, s, "/series?devices=nope")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 for unknown device, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestSeries_NonClimateDeviceFilter(t *testing.T) {
+	s, _ := dataSetup(t)
+	// winefridge exists but is a non-climate device — not chartable.
+	w := doGET(t, s, "/series?devices=winefridge")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 for non-climate device, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestSeries_UnknownLocationFilter(t *testing.T) {
+	s, _ := dataSetup(t)
+	// kitchen holds only winefridge (non-climate), so as far as the climate API
+	// is concerned the location does not exist → 400, not a silent empty series.
+	w := doGET(t, s, "/series?locations=kitchen")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 for climate-free location, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestSeries_BadGroupBy(t *testing.T) {
 	s, _ := dataSetup(t)
 	w := doGET(t, s, "/series?group_by=class")

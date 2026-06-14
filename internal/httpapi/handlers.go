@@ -3,6 +3,7 @@ package httpapi
 import (
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/sweeney/greenhouse/internal/climate"
@@ -103,6 +104,118 @@ func (s *Server) lookupDevice(w http.ResponseWriter, id string) (config.DeviceCo
 	return dev, true
 }
 
+// resolveDeviceFilter builds the climate device set a /series request should
+// chart, honouring the optional devices= and locations= CSV query filters.
+//
+// The candidate set is ALWAYS environmental_sensor devices only: greenhouse
+// charts climate, so a non-climate device that happens to share a location is
+// never a candidate (class is applied before location). The two filters compose
+// as AND — a device must satisfy both to survive. With neither filter, every
+// climate device is returned (the prior behaviour).
+//
+// Validation writes a 400 (and returns ok=false) when:
+//   - devices= names an id absent from the inventory, or one that exists but is
+//     not a climate sensor;
+//   - locations= names a location with no climate sensor (which includes a
+//     location holding only non-climate devices) — that location does not exist
+//     as far as the climate API is concerned, so it is an error, not an empty
+//     series.
+//
+// A valid pair of filters whose intersection is empty is NOT an error: it yields
+// an empty series list (200), consistent with a window that simply has no data.
+func (s *Server) resolveDeviceFilter(w http.ResponseWriter, r *http.Request) (map[string]config.DeviceConfig, bool) {
+	all := s.Config.Devices()
+
+	// Candidate set: climate devices only.
+	candidate := make(map[string]config.DeviceConfig)
+	for id, d := range all {
+		if d.Class == environmentalClass {
+			candidate[id] = d
+		}
+	}
+
+	q := r.URL.Query()
+	ids := splitCSV(q.Get("devices"))
+	locs := splitCSV(q.Get("locations"))
+
+	// Validate requested ids against the inventory and the climate class.
+	for _, id := range ids {
+		d, exists := all[id]
+		if !exists {
+			writeError(w, http.StatusBadRequest, "unknown device in 'devices': "+id)
+			return nil, false
+		}
+		if d.Class != environmentalClass {
+			writeError(w, http.StatusBadRequest, "device is not a climate sensor: "+id)
+			return nil, false
+		}
+	}
+
+	// Validate requested locations against locations that hold a climate sensor.
+	if len(locs) > 0 {
+		climateLocs := make(map[string]struct{})
+		for _, d := range candidate {
+			if d.Location != "" {
+				climateLocs[d.Location] = struct{}{}
+			}
+		}
+		for _, l := range locs {
+			if _, ok := climateLocs[l]; !ok {
+				writeError(w, http.StatusBadRequest, "unknown location in 'locations': "+l)
+				return nil, false
+			}
+		}
+	}
+
+	idSet := toSet(ids)
+	locSet := toSet(locs)
+
+	out := make(map[string]config.DeviceConfig)
+	for id, d := range candidate {
+		if idSet != nil {
+			if _, ok := idSet[id]; !ok {
+				continue
+			}
+		}
+		if locSet != nil {
+			if _, ok := locSet[d.Location]; !ok {
+				continue
+			}
+		}
+		out[id] = d
+	}
+	return out, true
+}
+
+// splitCSV splits a comma-separated query value into trimmed, non-empty parts.
+// An empty input yields nil (no filter requested).
+func splitCSV(v string) []string {
+	if v == "" {
+		return nil
+	}
+	parts := strings.Split(v, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// toSet turns a slice into a membership set, or nil for an empty slice (so
+// callers can treat nil as "no filter").
+func toSet(items []string) map[string]struct{} {
+	if len(items) == 0 {
+		return nil
+	}
+	m := make(map[string]struct{}, len(items))
+	for _, it := range items {
+		m[it] = struct{}{}
+	}
+	return m
+}
+
 // validGroupBy reports whether g is an accepted group_by mode.
 func validGroupBy(g string) bool {
 	switch g {
@@ -180,13 +293,17 @@ func (s *Server) handleSeries(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	devices, ok := s.resolveDeviceFilter(w, r)
+	if !ok {
+		return
+	}
 
 	win, iv, ok := s.resolveSeriesParams(w, r)
 	if !ok {
 		return
 	}
 
-	resp, err := s.buildSeries(r, win, iv, field, fn, groupBy, s.Config.Devices())
+	resp, err := s.buildSeries(r, win, iv, field, fn, groupBy, devices)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "influx query failed: "+err.Error())
 		return

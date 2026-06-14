@@ -46,6 +46,13 @@ requires a Bearer JWT (user **or** service token).
 - `fn` — `mean` (default) \| `min` \| `max` \| `last`. `sum` is deliberately not
   offered (non-additive). Bad fn → 400.
 - `group_by` — `device` (default) \| `location`. Bad value → 400.
+- `devices` — (`/series` only) CSV of device ids to chart, e.g.
+  `devices=climate_groundfloor,climate_firstfloor`. Restricts the series to those
+  sensors (omit for all climate devices). An unknown or non-climate id → 400.
+- `locations` — (`/series` only) CSV of location tags to chart, e.g.
+  `locations=ground_floor,first_floor`. The candidate set is always climate
+  sensors only, so a non-climate device sharing a location is never included, and
+  a location with no climate sensor → 400. Composes with `devices` as AND.
 - `shape` — `columns` (default, shared buckets axis + per-series arrays) \|
   `rows` (flat one-row-per-(series,bucket)). Both carry `field`/`unit`/`fn`.
 
