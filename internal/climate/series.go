@@ -222,6 +222,14 @@ func assembleByDevice(
 
 // assembleByLocation yields one series per distinct non-empty Location over
 // environmental devices, combining member readings with the per-bucket MEAN.
+//
+// TODO(circular): the combiner arithmetic-means members regardless of the
+// field's Circular flag. For a circular field (wind_dir_deg) over a location
+// with >1 vane this reconstructs the exact wrong-bearing bug the field-level
+// guard prevents — mean(350°,10°)=180°. It is a no-op today (single weather
+// station ⇒ members=1), but before a second direction sensor is added, Circular
+// must be carried into here and combined correctly (reject, or take last-of-
+// most-recently-reporting member) rather than arithmetic-meaned.
 func assembleByLocation(
 	buckets []time.Time,
 	devices map[string]config.DeviceConfig,
