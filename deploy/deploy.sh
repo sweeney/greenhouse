@@ -7,9 +7,9 @@
 #
 # Keeps the last 3 versioned binaries in /opt/greenhouse/bin/ and symlinks
 # the active one. Restarts the greenhouse service after upload.
-# Requires passwordless sudo for systemctl on the remote (see sudoers.sh).
+# Requires passwordless sudo for systemctl on the remote (installed by bootstrap.sh).
 #
-# First-time setup: run deploy/install.sh on the target host with sudo.
+# First-time setup: run deploy/bootstrap-greenhouse.sh on the target host with sudo.
 #
 set -euo pipefail
 
@@ -18,7 +18,8 @@ SERVICE="greenhouse"
 BINARY="greenhouse"
 BUILD_DIR="bin"
 DEPLOY_DIR="/opt/greenhouse/bin"
-HEALTH_URL="http://localhost:8082/healthz"
+HEALTH_URL="http://localhost:8686/healthz"
+PUBLIC_HEALTH_URL="https://greenhouse.swee.net/healthz"
 KEEP_VERSIONS=3
 
 VERSION=$(date +%Y%m%d-%H%M%S)
@@ -51,10 +52,29 @@ else
 fi
 
 if ssh "$REMOTE" "curl -fsS --max-time 5 -o /dev/null $HEALTH_URL"; then
-    echo "  ✓ $HEALTH_URL healthy"
+    echo "  ✓ $HEALTH_URL healthy (on-host)"
 else
     echo "  ✗ health check failed at $HEALTH_URL"
     ssh "$REMOTE" "sudo journalctl -u $SERVICE -n 20 --no-pager"
+    exit 1
+fi
+
+# Public endpoint: verify the externally-facing path (DNS + TLS + reverse proxy)
+# actually serves THIS build. Checked from the dev machine, not the host, so it
+# exercises real external reachability. Retries to absorb proxy/restart lag.
+echo "=== Verifying public endpoint ==="
+PUBLIC_OK=""
+for _ in 1 2 3 4 5; do
+    BODY=$(curl -fsS --max-time 8 "$PUBLIC_HEALTH_URL" 2>/dev/null) || { sleep 2; continue; }
+    if printf '%s' "$BODY" | grep -q "\"version\":\"$COMMIT\""; then PUBLIC_OK=1; break; fi
+    sleep 2
+done
+if [ -n "$PUBLIC_OK" ]; then
+    echo "  ✓ $PUBLIC_HEALTH_URL serving $COMMIT"
+else
+    echo "  ✗ public check failed at $PUBLIC_HEALTH_URL (expected version $COMMIT)"
+    echo "    last response: ${BODY:-<none>}"
+    echo "    on-host health passed, so this is DNS / TLS / reverse-proxy, not the service."
     exit 1
 fi
 

@@ -103,9 +103,28 @@ spectral on `main`.
 
 ## Deploy
 
-`make deploy` (= `./deploy/deploy.sh sweeney@garibaldi`) builds linux/amd64,
-uploads, symlinks, and restarts the systemd unit on garibaldi. First-time setup
-is `deploy/install.sh` (run with sudo on the host) + `deploy/sudoers.sh`.
+Runs on garibaldi as a hardened systemd unit, listening on **:8686**
+(statehouse :8080, countinghouse :8585), behind `https://greenhouse.swee.net`.
+
+First-time host setup is one self-contained script — copy nothing else, it embeds
+the config, unit and sudoers rule and mints the read-only Influx token itself:
+
+```
+scp deploy/bootstrap-greenhouse.sh sweeney@garibaldi:/tmp/
+ssh -t sweeney@garibaldi 'sudo bash /tmp/bootstrap-greenhouse.sh'   # prompts for the client_secret
+```
+
+It enables but does not start the service (no binary yet). Then deploy from the
+dev machine:
+
+```
+make deploy   # = ./deploy/deploy.sh sweeney@garibaldi
+```
+
+`deploy.sh` builds linux/amd64, uploads a timestamped binary, symlinks it active
+(keeping the last 3 for rollback), restarts the unit, and verifies both the
+on-host health and that `https://greenhouse.swee.net/healthz` serves the deployed
+commit.
 
 ## Follow-up
 

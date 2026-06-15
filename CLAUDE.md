@@ -36,9 +36,11 @@ shapes, the Influx Querier + fake, the Server/auth/CORS/spec skeleton, the confi
 - **Tests matter:** match countinghouse/statehouse density. Use fake doubles (fake Influx query
   client) and an injected clock — never call `time.Now()` in logic. `make test` = `go test -race -count=1 ./...`.
 - **Issues:** close via `Closes #N` in the commit message, not `gh issue close`.
-- **Deploy:** only when the user asks. `./deploy/deploy.sh sweeney@garibaldi` (SSH+systemctl on
-  garibaldi). Listen port **:8082** (statehouse :8080, countinghouse :8081). Locally: build the
-  binary; no tmux/systemctl.
+- **Deploy:** only when the user asks. First-time host setup is the self-contained
+  `deploy/bootstrap-greenhouse.sh` (`sudo bash` on garibaldi); then `make deploy`
+  (= `./deploy/deploy.sh sweeney@garibaldi`, SSH+systemctl). Listen port **:8686**
+  (statehouse :8080, countinghouse :8585), public at `https://greenhouse.swee.net`.
+  Locally: build the binary; no tmux/systemctl.
 
 ## Config & auth (see PLAN §7)
 

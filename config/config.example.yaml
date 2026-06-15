@@ -4,7 +4,7 @@
 # tariffs — it is a climate service, not an energy one.
 
 http:
-  listen: ":8082"
+  listen: ":8686"
   public_url: "https://greenhouse.swee.net"
 
 influx:
