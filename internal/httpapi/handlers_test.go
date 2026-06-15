@@ -463,6 +463,40 @@ func TestSeries_UnknownLocationFilter(t *testing.T) {
 	}
 }
 
+func TestSeries_RollingWindow7d(t *testing.T) {
+	s, q := dataSetup(t)
+	q.QueryFunc = func(flux string) ([]influx.Row, error) { return nil, nil }
+	w := doGET(t, s, "/series?window=7d&devices=climate_basement")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	m := decode(t, w)
+	if m["window"] != "7d" {
+		t.Errorf("window = %v, want 7d", m["window"])
+	}
+	// 7d span (~6.6 days at the fixture instant) → 6h smart default.
+	if m["interval"] != "6h" {
+		t.Errorf("interval = %v, want 6h (span default), proving it is not falling back to today", m["interval"])
+	}
+	// Fixture now = 2026-06-11 14:00 BST; 7d → local midnight 6 days back.
+	if m["from"] != "2026-06-05T00:00:00+01:00" {
+		t.Errorf("from = %v, want 2026-06-05T00:00:00+01:00 (day-aligned midnight 6 days back)", m["from"])
+	}
+	buckets := m["buckets"].([]any)
+	if len(buckets) <= 24 {
+		t.Errorf("got %d buckets; want > a single day's worth (not silently 'today')", len(buckets))
+	}
+}
+
+func TestSeries_RollingRejectsFromTo(t *testing.T) {
+	s, _ := dataSetup(t)
+	// from/to are valid only with window=custom; a rolling window derives its own range.
+	w := doGET(t, s, "/series?window=7d&from=2026-01-01T00:00:00Z")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400 for from with a rolling window, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestSeries_BadGroupBy(t *testing.T) {
 	s, _ := dataSetup(t)
 	w := doGET(t, s, "/series?group_by=class")

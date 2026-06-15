@@ -195,6 +195,112 @@ func TestResolveWindow_CustomErrors(t *testing.T) {
 	}
 }
 
+func TestResolveWindow_RollingDays(t *testing.T) {
+	loc := mustLondon(t)
+	now := utc(2026, 6, 11, 14, 30) // Thursday, BST
+
+	cases := []struct {
+		spec  string
+		start time.Time
+	}{
+		{"1d", time.Date(2026, 6, 11, 0, 0, 0, 0, loc)},  // ≡ today
+		{"7d", time.Date(2026, 6, 5, 0, 0, 0, 0, loc)},   // today + previous 6 days
+		{"30d", time.Date(2026, 5, 13, 0, 0, 0, 0, loc)}, // crosses the month boundary
+	}
+	for _, tc := range cases {
+		t.Run(tc.spec, func(t *testing.T) {
+			w := resolve(t, now, loc, tc.spec, time.Time{}, time.Time{})
+			if !w.Start.Equal(tc.start) {
+				t.Errorf("Start = %s, want %s", w.Start, tc.start)
+			}
+			if !w.Stop.Equal(now) {
+				t.Errorf("Stop = %s, want now %s", w.Stop, now)
+			}
+			if w.Label != tc.spec {
+				t.Errorf("Label = %q, want %q", w.Label, tc.spec)
+			}
+			// Day-form Start must be local midnight.
+			if h, m, s := w.Start.In(loc).Clock(); h != 0 || m != 0 || s != 0 {
+				t.Errorf("Start %s is not local midnight", w.Start)
+			}
+		})
+	}
+}
+
+// The motivating case: on a Monday, week-to-date collapses to today, but a
+// rolling 7d still looks back a full week.
+func TestResolveWindow_RollingDayWeekdayIndependent(t *testing.T) {
+	loc := mustLondon(t)
+	now := utc(2026, 6, 15, 9, 0) // 2026-06-15 is a Monday
+
+	today := resolve(t, now, loc, WindowToday, time.Time{}, time.Time{})
+	week := resolve(t, now, loc, WindowWeek, time.Time{}, time.Time{})
+	if !week.Start.Equal(today.Start) {
+		t.Fatalf("on a Monday week.Start (%s) should coincide with today.Start (%s)", week.Start, today.Start)
+	}
+
+	seven := resolve(t, now, loc, "7d", time.Time{}, time.Time{})
+	if seven.Start.Equal(today.Start) {
+		t.Errorf("7d.Start must differ from today.Start on a Monday, both %s", seven.Start)
+	}
+	want := time.Date(2026, 6, 9, 0, 0, 0, 0, loc) // midnight 6 days back
+	if !seven.Start.Equal(want) {
+		t.Errorf("7d.Start = %s, want %s", seven.Start, want)
+	}
+}
+
+func TestResolveWindow_RollingHours(t *testing.T) {
+	loc := mustLondon(t)
+	now := utc(2026, 6, 11, 14, 30)
+	w := resolve(t, now, loc, "24h", time.Time{}, time.Time{})
+	if !w.Start.Equal(now.Add(-24 * time.Hour)) {
+		t.Errorf("24h Start = %s, want now-24h %s", w.Start, now.Add(-24*time.Hour))
+	}
+	if !w.Stop.Equal(now) {
+		t.Errorf("Stop = %s, want now %s", w.Stop, now)
+	}
+	if w.Label != "24h" {
+		t.Errorf("Label = %q, want 24h", w.Label)
+	}
+}
+
+// A day-form rolling window across the spring-forward boundary spans a 23h day,
+// so the elapsed time is one hour short of the naive day count.
+func TestResolveWindow_RollingDSTSpringForward(t *testing.T) {
+	loc := mustLondon(t)
+	// 2026-03-29 is the 23h spring-forward day. now = 11:00 BST on the 30th.
+	now := utc(2026, 3, 30, 10, 0)
+	w := resolve(t, now, loc, "2d", time.Time{}, time.Time{})
+	wantStart := time.Date(2026, 3, 29, 0, 0, 0, 0, loc)
+	if !w.Start.Equal(wantStart) {
+		t.Errorf("2d Start = %s, want %s", w.Start, wantStart)
+	}
+	if got := w.Stop.Sub(w.Start); got != 34*time.Hour {
+		t.Errorf("2d elapsed = %v, want 34h (23h DST day + 11h), not 35h", got)
+	}
+}
+
+func TestResolveWindow_RollingOverCap(t *testing.T) {
+	loc := mustLondon(t)
+	now := utc(2026, 6, 11, 12, 0)
+	for _, spec := range []string{"100000d", "100000h"} {
+		if _, err := ResolveWindow(now, loc, spec, time.Time{}, time.Time{}); err == nil {
+			t.Errorf("%s: expected over-cap error, got nil", spec)
+		}
+	}
+}
+
+// Malformed rolling-ish specs fall through to the unknown-spec error.
+func TestResolveWindow_RollingInvalid(t *testing.T) {
+	loc := mustLondon(t)
+	now := utc(2026, 6, 11, 12, 0)
+	for _, spec := range []string{"0d", "d", "h", "-5d", "7x", "7", "7days", "1.5d"} {
+		if _, err := ResolveWindow(now, loc, spec, time.Time{}, time.Time{}); err == nil {
+			t.Errorf("%q: expected error, got nil", spec)
+		}
+	}
+}
+
 func TestResolveWindow_NilLocation(t *testing.T) {
 	if _, err := ResolveWindow(utc(2026, 6, 11, 12, 0), nil, WindowToday, time.Time{}, time.Time{}); err == nil {
 		t.Errorf("expected error for nil location, got nil")

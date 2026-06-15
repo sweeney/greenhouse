@@ -38,10 +38,16 @@ requires a Bearer JWT (user **or** service token).
 
 ### Series parameters
 
-- `window` — `today` (default) \| `week` \| `month` \| `custom`. `from`/`to`
-  (RFC3339) are valid **only** with `custom` — required there, and a 400 for any
-  other window (they are not silently ignored). A `custom` span over ~2 years
+- `window` — `today` (default) \| `week` \| `month` \| `custom`, or a **rolling**
+  spec `<N>d` / `<N>h` (e.g. `7d`, `30d`, `24h`). `from`/`to` (RFC3339) are valid
+  **only** with `custom` — required there, and a 400 for any other window
+  (period-to-date or rolling, which derive their own range). A span over ~2 years
   (Influx retention) → 400.
+- **Rolling windows:** `<N>d` is a trailing N calendar days ending now,
+  **day-aligned to local midnight** — `7d` = today + the previous 6 days, `1d` ≡ `today`;
+  `<N>h` is an **exact** trailing N hours (e.g. `24h`), not midnight-aligned. Use these for
+  "last 7 days" / "last 30 days" (`7d`/`30d`), as distinct from `week`/`month`, which reset
+  on Monday / the 1st.
 - `interval` — `5m,15m,30m,1h,6h,1d`; smart default per window, ~1000-bucket cap.
 - `field` — one of `temperature_c, humidity_pct, pressure_hpa, wind_speed_ms,
   wind_dir_deg, rainfall_mm, illuminance_lux, uv_index`. Default `temperature_c`.
