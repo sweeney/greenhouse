@@ -1,2 +1,5 @@
 /bin/
 *.local.*
+# Local dev secrets / config for running the service + demo (never commit)
+/.local/
+/config/config.local.yaml
