@@ -96,9 +96,27 @@ decision entirely into config; see that file's comment for the trade-off.
 name in `statehouse_devices`, otherwise it falls back to the full field
 registry. **The fallback over-advertises:** greenhouse can't know per-device
 coverage without querying Influx, so a device whose config omits the key appears
-to offer every field — and a series request for one it doesn't report returns
-200 with all-null buckets, indistinguishable from a sensor outage. Populating
-`environment_fields` in the namespace is what makes the catalog honest.
+to offer every field. Populating `environment_fields` in the namespace is what
+makes the catalog honest.
+
+Where config declares it, coverage is also **enforced on the series endpoints**,
+with two deliberately different answers:
+
+- `GET /devices/{id}/series` — a field the named device does not report is a
+  **400**. The endpoint promises exactly one series, so an impossible request
+  is an error; answering 200 with all-null buckets would be indistinguishable
+  from a sensor outage (null means "no reading").
+- `GET /series` — devices that cannot report the field are **omitted** rather
+  than padding the response with all-null lines. `field=pressure_hpa` returns
+  the one series that has data, not one real line and nine empty ones. If the
+  filter leaves nothing, that's a valid empty `200`, consistent with a
+  `devices=`/`locations=` intersection that matches nothing.
+
+A device declaring no `environment_fields` is treated as **unknown coverage**
+and is never rejected or omitted. `environment_fields` is config, and config can
+be stale — if a sensor starts reporting a new field before the namespace catches
+up, greenhouse must not turn that oversight into a data outage. It only ever
+narrows on a positive declaration.
 
 ## Config
 

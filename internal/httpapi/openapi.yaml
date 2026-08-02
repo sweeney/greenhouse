@@ -138,7 +138,10 @@ paths:
       description: >
         Single-device convenience form of /series: the same response shapes
         carrying exactly one series for the device. Non-climate devices return
-        400. field/fn/shape behave as on /series.
+        400, as does a field the device does not report where its config
+        declares environment_fields — this endpoint promises exactly one series,
+        so an impossible request is an error rather than an all-null response.
+        field/fn/shape otherwise behave as on /series.
       operationId: getDeviceSeries
       tags: [data]
       parameters:
@@ -286,6 +289,18 @@ components:
       description: >
         The environmental field to chart. Defaults to temperature_c. An unknown
         field returns 400.
+
+        Per-device coverage is honoured where config declares it
+        (environment_fields). On /devices/{id}/series, a field the named device
+        does not report is a 400 — the endpoint promises exactly one series, and
+        answering with all-null buckets would be indistinguishable from a sensor
+        outage. On /series, devices that cannot report the field are simply
+        omitted from the result rather than padding it with empty lines; if that
+        leaves nothing, the response is an empty 200.
+
+        A device whose config declares no environment_fields is treated as
+        unknown coverage and is never rejected or omitted, so a stale namespace
+        cannot hide readings that genuinely exist.
       schema:
         type: string
         enum: [temperature_c, humidity_pct, pressure_hpa, wind_speed_ms, wind_dir_deg, rainfall_mm, illuminance_lux, uv_index]

@@ -130,3 +130,34 @@ func TestEnvironmentFieldsJSONKey(t *testing.T) {
 		t.Errorf("legacy `fields` key must not populate EnvironmentFields, got %v", d.EnvironmentFields)
 	}
 }
+
+// --- MayReportField (per-device field coverage) ---
+
+func TestMayReportField(t *testing.T) {
+	declared := DeviceConfig{
+		Class:             "environmental_sensor",
+		EnvironmentFields: []string{"temperature_c", "humidity_pct"},
+	}
+	if !declared.MayReportField("temperature_c") {
+		t.Error("a declared field must be reportable")
+	}
+	if declared.MayReportField("rainfall_mm") {
+		t.Error("a field outside an explicit declaration must not be reportable")
+	}
+
+	// The permissive case: no declaration means coverage is UNKNOWN, so every
+	// field is allowed. This is what stops a stale namespace from hiding real
+	// readings — see the doc comment on MayReportField.
+	undeclared := DeviceConfig{Class: "environmental_sensor"}
+	for _, f := range []string{"temperature_c", "rainfall_mm", "uv_index"} {
+		if !undeclared.MayReportField(f) {
+			t.Errorf("undeclared coverage must permit %q", f)
+		}
+	}
+
+	// An explicitly empty (non-nil) list is still "no declaration".
+	empty := DeviceConfig{Class: "environmental_sensor", EnvironmentFields: []string{}}
+	if !empty.MayReportField("rainfall_mm") {
+		t.Error("an empty list must behave as undeclared, not as 'reports nothing'")
+	}
+}

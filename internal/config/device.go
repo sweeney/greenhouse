@@ -103,6 +103,30 @@ func (d DeviceConfig) ReportsEnvironment() bool {
 	return ok
 }
 
+// MayReportField reports whether this device could plausibly have data for
+// field, according to its declared EnvironmentFields.
+//
+// It is deliberately PERMISSIVE when coverage is unknown: a device declaring no
+// EnvironmentFields returns true for every field. EnvironmentFields is config,
+// and config can be stale — if a sensor starts reporting a new field before the
+// namespace is updated, treating "undeclared" as "does not report" would turn a
+// config oversight into a data outage, rejecting readings that genuinely exist.
+// Callers therefore only ever narrow or reject on a POSITIVE declaration.
+//
+// This mirrors the catalog's registry fallback: no declaration means "we don't
+// know", and greenhouse does not block on what it does not know.
+func (d DeviceConfig) MayReportField(field string) bool {
+	if len(d.EnvironmentFields) == 0 {
+		return true
+	}
+	for _, f := range d.EnvironmentFields {
+		if f == field {
+			return true
+		}
+	}
+	return false
+}
+
 // normaliseDevices converts legacy ieee_address/friendly_name shorthands
 // into the canonical scheme/primary/display fields. Mirrors statehouse so
 // devices fetched from the remote namespace are normalised identically.

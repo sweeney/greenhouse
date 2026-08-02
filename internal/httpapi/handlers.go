@@ -203,6 +203,20 @@ func (s *Server) resolveDeviceFilter(w http.ResponseWriter, r *http.Request) (ma
 	return out, true
 }
 
+// filterDevicesReportingField drops devices that cannot report field, per their
+// declared environment_fields. Devices that declare nothing are kept (coverage
+// unknown — see config.MayReportField), so this only ever narrows on a positive
+// declaration and can never hide data greenhouse was not told about.
+func filterDevicesReportingField(devices map[string]config.DeviceConfig, field string) map[string]config.DeviceConfig {
+	out := make(map[string]config.DeviceConfig, len(devices))
+	for id, d := range devices {
+		if d.MayReportField(field) {
+			out[id] = d
+		}
+	}
+	return out
+}
+
 // splitCSV splits a comma-separated query value into trimmed, non-empty parts.
 // An empty input yields nil (no filter requested).
 func splitCSV(v string) []string {
@@ -319,6 +333,14 @@ func (s *Server) handleSeries(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// Drop devices that cannot report this field. /series promises a SET of
+	// series, so devices with no possible data are irrelevant rather than an
+	// error: without this, field=pressure_hpa returns one real line and nine
+	// all-null ones, indistinguishable from nine offline sensors. An empty
+	// result is a valid 200, consistent with a filter intersection that matches
+	// nothing. (The single-device endpoint promises exactly one series and so
+	// 400s instead — see handleDeviceSeries.)
+	devices = filterDevicesReportingField(devices, field)
 
 	win, iv, ok := s.resolveSeriesParams(w, r)
 	if !ok {
@@ -354,6 +376,15 @@ func (s *Server) handleDeviceSeries(w http.ResponseWriter, r *http.Request) {
 	}
 	field, fn, ok := s.resolveFieldFn(w, r)
 	if !ok {
+		return
+	}
+	// This endpoint promises exactly one series for a named device, so a field
+	// that device cannot report is an impossible request, not an empty one.
+	// Answering 200-with-nulls would be indistinguishable from a sensor outage
+	// (null means "no reading"), so say so plainly instead.
+	if !dev.MayReportField(field) {
+		writeError(w, http.StatusBadRequest,
+			"device "+id+" does not report '"+field+"' (reports: "+strings.Join(dev.EnvironmentFields, ", ")+")")
 		return
 	}
 

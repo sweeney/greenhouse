@@ -5,6 +5,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -30,7 +31,7 @@ func testDevices() map[string]config.DeviceConfig {
 		// Explicit hint → the catalog reports exactly these.
 		"climate_weatherstation": {
 			Class: "environmental_sensor", Location: "garden", DisplayName: "Weather Station",
-			EnvironmentFields: []string{"temperature_c", "humidity_pct", "pressure_hpa", "wind_speed_ms"},
+			EnvironmentFields: []string{"temperature_c", "humidity_pct", "pressure_hpa", "wind_speed_ms", "wind_dir_deg"},
 		},
 		// fire_alarm is charted like any other climate class. It sits in a room
 		// holding NO environmental_sensor, mirroring prod (office/utility): the
@@ -186,8 +187,8 @@ func TestDevices_EnvironmentFieldsHintVsFallback(t *testing.T) {
 	for _, d := range resp.Devices {
 		byID[d.ID] = d.EnvironmentFields
 	}
-	if len(byID["climate_weatherstation"]) != 4 {
-		t.Errorf("weatherstation = %v, want the explicit 4 from config", byID["climate_weatherstation"])
+	if len(byID["climate_weatherstation"]) != 5 {
+		t.Errorf("weatherstation = %v, want the explicit 5 from config", byID["climate_weatherstation"])
 	}
 	if len(byID["climate_basement"]) != len(climate.FieldNames()) {
 		t.Errorf("basement should fall back to the full registry, got %v", byID["climate_basement"])
@@ -451,6 +452,94 @@ func TestSeries_NoFilterAllClimate(t *testing.T) {
 		if keys[i] != k {
 			t.Errorf("series[%d] = %q, want %q (sorted by id)", i, keys[i], k)
 		}
+	}
+}
+
+// --- per-device field coverage (environment_fields) ---
+//
+// Two deliberately different answers: the single-device endpoint promises
+// exactly one series, so an impossible field is a 400; /series promises a set,
+// so non-reporting devices are simply omitted.
+
+// A named device asked for a field it does not report is an impossible request,
+// not an empty one. 200-with-nulls would be indistinguishable from an outage.
+func TestDeviceSeries_UnreportedField400(t *testing.T) {
+	s, _ := dataSetup(t)
+	// The fire alarm declares temperature_c only.
+	w := doGET(t, s, "/devices/firealarm_utility/series?field=humidity_pct")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d: %s", w.Code, w.Body.String())
+	}
+	// The error names both the field and what the device does report, so a
+	// consumer can correct the request without a second round trip.
+	body := w.Body.String()
+	for _, want := range []string{"humidity_pct", "temperature_c", "firealarm_utility"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("error should mention %q, got %s", want, body)
+		}
+	}
+}
+
+// A device that declares nothing keeps the permissive behaviour: coverage is
+// unknown, so greenhouse must not reject on a guess.
+func TestDeviceSeries_UndeclaredCoverageStillAllowed(t *testing.T) {
+	s, q := dataSetup(t)
+	q.QueryFunc = func(flux string) ([]influx.Row, error) { return nil, nil }
+	// climate_basement declares no environment_fields.
+	w := doGET(t, s, "/devices/climate_basement/series?window=today&interval=1h&field=rainfall_mm")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200 (unknown coverage must not 400), got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// A declared field is of course still chartable.
+func TestDeviceSeries_DeclaredFieldAllowed(t *testing.T) {
+	s, q := dataSetup(t)
+	q.QueryFunc = func(flux string) ([]influx.Row, error) {
+		return bucketRows(t, s, "firealarm_utility", "today", "1h", 20.2), nil
+	}
+	w := doGET(t, s, "/devices/firealarm_utility/series?window=today&interval=1h&field=temperature_c")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// /series drops devices that cannot report the field rather than padding the
+// response with all-null lines. The weather station declares pressure_hpa; the
+// fire alarm declares temperature_c only; the basement declares nothing and so
+// is kept (unknown coverage).
+func TestSeries_OmitsDevicesThatCannotReportField(t *testing.T) {
+	s, q := dataSetup(t)
+	q.QueryFunc = func(flux string) ([]influx.Row, error) {
+		return bucketRows(t, s, "climate_weatherstation", "today", "1h", 1008.5), nil
+	}
+	w := doGET(t, s, "/series?window=today&interval=1h&field=pressure_hpa")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	keys := seriesKeys(t, w)
+	want := []string{"climate_basement", "climate_weatherstation"}
+	if len(keys) != len(want) {
+		t.Fatalf("want %v (firealarm_utility omitted: declares temperature_c only), got %v", want, keys)
+	}
+	for i := range want {
+		if keys[i] != want[i] {
+			t.Errorf("keys[%d] = %q, want %q", i, keys[i], want[i])
+		}
+	}
+}
+
+// Narrowing to nothing is a valid empty 200, consistent with a filter
+// intersection that matches no device — not an error.
+func TestSeries_AllDevicesOmittedIsEmpty200(t *testing.T) {
+	s, q := dataSetup(t)
+	q.QueryFunc = func(flux string) ([]influx.Row, error) { return nil, nil }
+	w := doGET(t, s, "/series?window=today&interval=1h&field=uv_index&devices=firealarm_utility")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if keys := seriesKeys(t, w); len(keys) != 0 {
+		t.Fatalf("want no series, got %v", keys)
 	}
 }
 

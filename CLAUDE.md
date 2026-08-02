@@ -24,6 +24,18 @@ shapes, the Influx Querier + fake, the Server/auth/CORS/spec skeleton, the confi
   canonical bucket axis. This bit it in countinghouse — don't reintroduce it. See PLAN §3.
 - **No energy concepts.** No cost, tariff, bill, counter/integral, or on/off events. Those belong to
   countinghouse. Climate fields are plain gauge readings.
+- **Device selection is a class allowlist**, in ONE place: `climateClasses` +
+  `DeviceConfig.ReportsEnvironment()` in `internal/config/device.go`. Currently `environmental_sensor`
+  and `fire_alarm` (the alarms report `temperature_c`, and office/utility have no other sensor).
+  Never re-introduce a per-package class const — that duplication is what this replaced. Known
+  limitation, documented at the map: class asserts "every device of this class reports environment
+  telemetry", so a future non-reporting model would yield an empty series until someone edits and
+  deploys. The alternative (select on `environment_fields`) is a one-predicate change.
+- **`environment_fields` is a hint, and staleness must not lose data.** It declares what a device
+  writes to `device_environment`. Where declared, `/devices/{id}/series` 400s on a field the device
+  does not report and `/series` omits such devices; where **undeclared**, coverage is UNKNOWN and
+  greenhouse never rejects or omits (`DeviceConfig.MayReportField`). Only ever narrow on a positive
+  declaration — config lags reality, and a stale namespace must not hide real readings.
 
 ## House rules
 
