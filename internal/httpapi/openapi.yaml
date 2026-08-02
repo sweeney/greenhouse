@@ -63,12 +63,21 @@ paths:
     get:
       summary: Climate device catalog
       description: >
-        Discovery catalog of climate devices (class environmental_sensor) from
-        the statehouse_devices namespace, each with a `fields` hint of the
-        environmental fields it reports. The hint comes from the device config's
-        explicit `fields` list when present; otherwise it falls back to the full
-        field registry. Lets a UI build a device picker without knowing Influx.
-        Sorted by id.
+        Discovery catalog of climate devices from the statehouse_devices
+        namespace, each with an `environment_fields` hint of the fields it
+        writes to the device_environment measurement.
+
+        A device is charted when its class reports environmental telemetry:
+        `environmental_sensor` (purpose-built sensors) or `fire_alarm` (the
+        installed alarms report temperature_c alongside smoke state, and in some
+        rooms they are the ONLY environment source). The `class` is reported
+        as-is so a consumer can distinguish the two.
+
+        The hint comes from the device config's explicit `environment_fields`
+        list when present; otherwise it falls back to the full field registry,
+        which over-advertises — a device whose config omits the key may appear
+        to offer fields it never reports. Lets a UI build a device picker
+        without knowing Influx. Sorted by id.
       operationId: getDevices
       tags: [data]
       responses:
@@ -602,7 +611,7 @@ components:
 
     DeviceCatalogEntry:
       type: object
-      description: One climate device catalog row.
+      description: One climate device catalog row (environmental_sensor or fire_alarm).
       properties:
         id:
           type: string
@@ -612,12 +621,15 @@ components:
           type: string
         class:
           type: string
-        fields:
+        environment_fields:
           type: array
           items:
             type: string
-          description: Environmental fields this device reports (from config, else the registry fallback).
-      required: [id, display_name, location, class, fields]
+          description: >
+            Fields this device writes to device_environment, from the config key
+            of the same name. Falls back to the full field registry when config
+            does not declare it, in which case it may over-advertise.
+      required: [id, display_name, location, class, environment_fields]
 
     DevicesCatalog:
       type: object

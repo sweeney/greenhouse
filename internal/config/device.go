@@ -43,11 +43,64 @@ type DeviceConfig struct {
 	// round-trips; greenhouse never reads it (it is an energy concern).
 	EnergyStrategy string `yaml:"energy_strategy" json:"energy_strategy,omitempty"`
 
-	// Fields, when present in the namespace, lists the environmental fields
-	// this device reports (e.g. ["temperature_c","humidity_pct"]). It is an
-	// optional hint: when absent, greenhouse falls back to the full field
-	// registry for the device catalog. Greenhouse never requires it.
-	Fields []string `yaml:"fields" json:"fields,omitempty"`
+	// EnvironmentFields, when present in the namespace, lists the fields this
+	// device actually writes to the `device_environment` measurement (e.g.
+	// ["humidity_pct","temperature_c"]). Named for that measurement rather
+	// than a bare "fields": statehouse_devices is a SHARED namespace, so a
+	// generic key would be ambiguous the moment a sibling service wants to
+	// declare its own per-device field list.
+	//
+	// It is an optional hint. When absent, greenhouse falls back to the full
+	// field registry for the device catalog, which over-advertises: an indoor
+	// sensor reporting only temperature and humidity would appear to offer
+	// rainfall and UV, and a series request for one of those returns 200 with
+	// all-null buckets — indistinguishable from a sensor outage. Populating
+	// this key in the namespace is what makes /devices honest.
+	EnvironmentFields []string `yaml:"environment_fields" json:"environment_fields,omitempty"`
+}
+
+// climateClasses are the statehouse device classes whose members write
+// environmental telemetry to the `device_environment` measurement, and which
+// greenhouse therefore charts.
+//
+// `fire_alarm` is here because the three installed alarms each write
+// temperature_c alongside their smoke state — and crucially, office and utility
+// hold NO environmental_sensor at all, so without them those two rooms have no
+// climate coverage despite live data sitting in Influx.
+//
+// KNOWN LIMITATION — this is a deliberate, documented trade-off:
+//
+// Selecting on class asserts "every device of this class reports environment
+// telemetry". That is true of the current fleet but is not guaranteed: a future
+// fire alarm model that does not report temperature would still be listed by
+// /devices and would return a well-formed, permanently empty series. There is
+// no way to detect that from config alone, and correcting it means editing this
+// map and redeploying.
+//
+// The alternative — selecting on a non-empty EnvironmentFields — pushes the
+// decision entirely into config, so a non-reporting device is simply omitted
+// and no deploy is needed to onboard a new sensor class. It was NOT taken here
+// because the current fleet is homogeneous and the class allowlist is a much
+// smaller change; the option remains open and EnvironmentFields is already
+// populated in the namespace for every reporting device, so switching later is
+// a one-predicate change with no config migration.
+//
+// Adding a class here is a code change plus a deploy. Prefer that over
+// scattering class comparisons: this map is the single source of truth, so the
+// climate and httpapi packages agree by construction rather than by two
+// consts that can drift apart.
+var climateClasses = map[string]struct{}{
+	"environmental_sensor": {},
+	"fire_alarm":           {},
+}
+
+// ReportsEnvironment reports whether greenhouse charts this device — i.e.
+// whether its class writes to the `device_environment` measurement. It is the
+// single predicate behind the device catalog, the series device set, and the
+// devices=/locations= filters.
+func (d DeviceConfig) ReportsEnvironment() bool {
+	_, ok := climateClasses[d.Class]
+	return ok
 }
 
 // normaliseDevices converts legacy ieee_address/friendly_name shorthands

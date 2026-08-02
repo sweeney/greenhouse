@@ -39,7 +39,7 @@ Measurement **`device_environment`**, tags `device_id`, `class`, `location`. Fie
 | `illuminance_lux` | lux | weather station |
 | `uv_index` | index | weather station |
 
-Devices (class `environmental_sensor` in `statehouse_devices`): `climate_basement`,
+Devices (classes `environmental_sensor` + `fire_alarm` in `statehouse_devices`): `climate_basement`,
 `climate_groundfloor`, `climate_firstfloor`, `climate_secondfloor`, `climate_thirdfloor`
 (indoor temp/humidity), `glowsensorth1` (network cabinet), and `climate_weatherstation`
 (outdoor, full set; `location: garden`). Bucket: `statehouse` (org `swee.net`, 2-yr retention).
@@ -102,7 +102,7 @@ public; everything else requires a Bearer JWT (user **or** service token, via `c
 |---|---|---|
 | `GET /healthz` | public | status, version, uptime, influx_reachable, remote_config status |
 | `GET /openapi.json` | public | spec (path-coverage test enforced) |
-| `GET /devices` | yes | climate device catalog: id, display_name, location, class, `fields` (which it reports) |
+| `GET /devices` | yes | climate device catalog: id, display_name, location, class, `environment_fields` (which it reports) |
 | `GET /devices/{id}/series?window=&interval=&field=&fn=&shape=` | yes | single-device, single-field time-series (columnar or rows), with `unit` |
 | `GET /series?window=&interval=&field=&fn=&group_by=&shape=` | yes | multi-series; `group_by`: `device` (default), `location` (mean per room) |
 | `GET /devices/{id}/latest` | yes | the device's most recent reading across all its fields (for dashboards) |

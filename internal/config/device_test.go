@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestNormaliseDevicesLegacyShorthand(t *testing.T) {
 	devices := map[string]DeviceConfig{
@@ -54,5 +57,76 @@ func TestNormaliseDevicesNoLegacyFields(t *testing.T) {
 	d := devices["climate_basement"]
 	if d.Scheme != "" {
 		t.Errorf("scheme = %q, want empty (no legacy fields to imply zigbee)", d.Scheme)
+	}
+}
+
+// --- ReportsEnvironment (the single climate-device predicate) ---
+
+// The class allowlist is the one place that decides what greenhouse charts.
+// Pinning it as a table makes any future widening an explicit, reviewed edit
+// rather than an incidental one.
+func TestReportsEnvironment(t *testing.T) {
+	tests := []struct {
+		name  string
+		class string
+		want  bool
+	}{
+		{"purpose-built sensor", "environmental_sensor", true},
+		// Fire alarms report temperature_c alongside their smoke state, and in
+		// office/utility they are the ONLY environment source.
+		{"fire alarm", "fire_alarm", true},
+		{"power device", "continuous_power_device", false},
+		{"cycle power device", "cycle_power_device", false},
+		{"energy meter", "energy_meter", false},
+		{"binary state device", "binary_state_device", false},
+		{"ups sensor", "ups_sensor", false},
+		{"media power device", "media_power_device", false},
+		{"unknown class", "something_new", false},
+		{"empty class", "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := DeviceConfig{Class: tt.class}
+			if got := d.ReportsEnvironment(); got != tt.want {
+				t.Errorf("ReportsEnvironment() for class %q = %v, want %v", tt.class, got, tt.want)
+			}
+		})
+	}
+}
+
+// The predicate keys off class alone: a declared environment_fields list does
+// NOT make a non-climate device chartable under the current (option A) rule.
+// This is the documented limitation — if the selection rule ever moves to
+// environment_fields, this test is the one that should change.
+func TestReportsEnvironment_IgnoresEnvironmentFields(t *testing.T) {
+	d := DeviceConfig{Class: "continuous_power_device", EnvironmentFields: []string{"temperature_c"}}
+	if d.ReportsEnvironment() {
+		t.Error("a non-climate class with environment_fields must not be charted under the class allowlist")
+	}
+	// ...and conversely, a climate class with no hint is still charted.
+	d = DeviceConfig{Class: "fire_alarm"}
+	if !d.ReportsEnvironment() {
+		t.Error("a climate class must be charted even without an environment_fields hint")
+	}
+}
+
+// environment_fields round-trips from the shared namespace's JSON shape.
+func TestEnvironmentFieldsJSONKey(t *testing.T) {
+	var d DeviceConfig
+	body := `{"class":"fire_alarm","environment_fields":["temperature_c"]}`
+	if err := json.Unmarshal([]byte(body), &d); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(d.EnvironmentFields) != 1 || d.EnvironmentFields[0] != "temperature_c" {
+		t.Fatalf("environment_fields = %v, want [temperature_c]", d.EnvironmentFields)
+	}
+	// The old generic key must NOT populate it — a stale namespace should fail
+	// loudly via the registry fallback, not silently half-work.
+	d = DeviceConfig{}
+	if err := json.Unmarshal([]byte(`{"fields":["temperature_c"]}`), &d); err != nil {
+		t.Fatalf("unmarshal legacy: %v", err)
+	}
+	if d.EnvironmentFields != nil {
+		t.Errorf("legacy `fields` key must not populate EnvironmentFields, got %v", d.EnvironmentFields)
 	}
 }

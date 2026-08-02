@@ -11,9 +11,6 @@ import (
 	"github.com/sweeney/greenhouse/internal/influx"
 )
 
-// environmentalClass is the device class greenhouse charts.
-const environmentalClass = "environmental_sensor"
-
 // resolveWindowParams parses the window/from/to query params and resolves them
 // to a concrete Window using the injected clock + location. It returns a 400
 // (written to w) and ok=false on any bad/missing param or unknown window.
@@ -126,11 +123,11 @@ func (s *Server) lookupDevice(w http.ResponseWriter, id string) (config.DeviceCo
 // resolveDeviceFilter builds the climate device set a /series request should
 // chart, honouring the optional devices= and locations= CSV query filters.
 //
-// The candidate set is ALWAYS environmental_sensor devices only: greenhouse
-// charts climate, so a non-climate device that happens to share a location is
-// never a candidate (class is applied before location). The two filters compose
-// as AND — a device must satisfy both to survive. With neither filter, every
-// climate device is returned (the prior behaviour).
+// The candidate set is ALWAYS climate devices only (config.ReportsEnvironment):
+// greenhouse charts climate, so a non-climate device that happens to share a
+// location is never a candidate (class is applied before location). The two
+// filters compose as AND — a device must satisfy both to survive. With neither
+// filter, every climate device is returned (the prior behaviour).
 //
 // Validation writes a 400 (and returns ok=false) when:
 //   - devices= names an id absent from the inventory, or one that exists but is
@@ -148,7 +145,7 @@ func (s *Server) resolveDeviceFilter(w http.ResponseWriter, r *http.Request) (ma
 	// Candidate set: climate devices only.
 	candidate := make(map[string]config.DeviceConfig)
 	for id, d := range all {
-		if d.Class == environmentalClass {
+		if d.ReportsEnvironment() {
 			candidate[id] = d
 		}
 	}
@@ -164,7 +161,7 @@ func (s *Server) resolveDeviceFilter(w http.ResponseWriter, r *http.Request) (ma
 			writeError(w, http.StatusBadRequest, "unknown device in 'devices': "+id)
 			return nil, false
 		}
-		if d.Class != environmentalClass {
+		if !d.ReportsEnvironment() {
 			writeError(w, http.StatusBadRequest, "device is not a climate sensor: "+id)
 			return nil, false
 		}
@@ -247,20 +244,26 @@ func validGroupBy(g string) bool {
 
 // catalogEntry is one row in the /devices catalog.
 type catalogEntry struct {
-	ID          string   `json:"id"`
-	DisplayName string   `json:"display_name"`
-	Location    string   `json:"location"`
-	Class       string   `json:"class"`
-	Fields      []string `json:"fields"`
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name"`
+	Location    string `json:"location"`
+	Class       string `json:"class"`
+	// EnvironmentFields mirrors the config key of the same name: the fields
+	// this device actually writes to `device_environment`. Named to match, so
+	// the catalog and the namespace describe the same thing with one word.
+	EnvironmentFields []string `json:"environment_fields"`
 }
 
-// handleDevices serves GET /devices: the climate device catalog. It returns the
-// environmental_sensor devices from the statehouse_devices snapshot, each with a
-// `fields` hint of the environmental fields it reports. The hint comes from the
-// device config's explicit `fields` list when present; otherwise it falls back
-// to the full field registry (greenhouse cannot know per-device coverage without
-// querying Influx, and the registry is a safe superset for building a picker).
-// Sorted by id for stable output.
+// handleDevices serves GET /devices: the climate device catalog. It returns
+// every device whose class reports environmental telemetry (see
+// config.ReportsEnvironment — environmental_sensor and fire_alarm), each with
+// an `environment_fields` hint of the fields it writes.
+//
+// The hint comes from the device config's explicit environment_fields list when
+// present; otherwise it falls back to the full field registry. The fallback
+// over-advertises — greenhouse cannot know per-device coverage without querying
+// Influx — so populating environment_fields in the namespace is what makes this
+// catalog honest. Sorted by id for stable output.
 func (s *Server) handleDevices(w http.ResponseWriter, _ *http.Request) {
 	devices := s.Config.Devices()
 
@@ -273,19 +276,19 @@ func (s *Server) handleDevices(w http.ResponseWriter, _ *http.Request) {
 	out := make([]catalogEntry, 0, len(ids))
 	for _, id := range ids {
 		dev := devices[id]
-		if dev.Class != environmentalClass {
+		if !dev.ReportsEnvironment() {
 			continue
 		}
-		fields := dev.Fields
+		fields := dev.EnvironmentFields
 		if len(fields) == 0 {
 			fields = climate.FieldNames()
 		}
 		out = append(out, catalogEntry{
-			ID:          id,
-			DisplayName: dev.DisplayName,
-			Location:    dev.Location,
-			Class:       dev.Class,
-			Fields:      fields,
+			ID:                id,
+			DisplayName:       dev.DisplayName,
+			Location:          dev.Location,
+			Class:             dev.Class,
+			EnvironmentFields: fields,
 		})
 	}
 
@@ -340,7 +343,7 @@ func (s *Server) handleDeviceSeries(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if dev.Class != environmentalClass {
+	if !dev.ReportsEnvironment() {
 		writeError(w, http.StatusBadRequest, "device is not a climate sensor")
 		return
 	}
@@ -400,7 +403,7 @@ func (s *Server) handleDeviceLatest(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if dev.Class != environmentalClass {
+	if !dev.ReportsEnvironment() {
 		writeError(w, http.StatusBadRequest, "device is not a climate sensor")
 		return
 	}

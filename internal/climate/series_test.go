@@ -311,3 +311,78 @@ func TestBuildSeries_NoEnvironmentalDevicesNoQuery(t *testing.T) {
 		t.Errorf("want 0 series, got %d", len(resp.Series))
 	}
 }
+
+// --- fire_alarm participation (option A: class allowlist) ---
+
+// mixedClassDevices mirrors the real network_cabinet topology: a purpose-built
+// sensor and a fire alarm in the SAME room, plus a fire alarm alone in a room
+// with no environmental_sensor at all (office/utility in prod).
+func mixedClassDevices() map[string]config.DeviceConfig {
+	return map[string]config.DeviceConfig{
+		"glowsensorth1":     {Class: "environmental_sensor", Location: "network_cabinet", DisplayName: "Glow Sensor"},
+		"firealarm_network": {Class: "fire_alarm", Location: "network_cabinet", DisplayName: "Fire Alarm: Network"},
+		"firealarm_utility": {Class: "fire_alarm", Location: "utility", DisplayName: "Fire Alarm: Utility"},
+		"winefridge":        {Class: "continuous_power_device", Location: "kitchen", DisplayName: "Wine Fridge"},
+	}
+}
+
+// group_by=device keeps every climate device on its own line regardless of
+// class, and still excludes non-climate devices.
+func TestAssembleSeries_ByDevice_IncludesFireAlarms(t *testing.T) {
+	buckets := []time.Time{time.Unix(0, 0).UTC(), time.Unix(3600, 0).UTC()}
+	got := AssembleSeries(buckets, mixedClassDevices(), vals(map[string][]float64{
+		"glowsensorth1":     {22.7, 22.8},
+		"firealarm_network": {23.6, 23.5},
+		"firealarm_utility": {20.2, 20.3},
+		"winefridge":        {99, 99},
+	}), GroupByDevice)
+
+	var keys []string
+	for _, s := range got {
+		keys = append(keys, s.Key)
+	}
+	want := []string{"firealarm_network", "firealarm_utility", "glowsensorth1"}
+	if len(keys) != len(want) {
+		t.Fatalf("keys = %v, want %v", keys, want)
+	}
+	for i := range want {
+		if keys[i] != want[i] {
+			t.Errorf("keys[%d] = %q, want %q", i, keys[i], want[i])
+		}
+	}
+}
+
+// group_by=location means a fire alarm together with a co-located sensor —
+// the first time any real room has had two members. Mean, never sum: this is
+// the non-additive invariant applied across mixed classes.
+func TestAssembleSeries_ByLocation_MeansAcrossMixedClasses(t *testing.T) {
+	buckets := []time.Time{time.Unix(0, 0).UTC()}
+	got := AssembleSeries(buckets, mixedClassDevices(), vals(map[string][]float64{
+		"glowsensorth1":     {22.0},
+		"firealarm_network": {24.0},
+		"firealarm_utility": {20.0},
+	}), GroupByLocation)
+
+	byKey := map[string]Series{}
+	for _, s := range got {
+		byKey[s.Key] = s
+	}
+	cab, ok := byKey["network_cabinet"]
+	if !ok {
+		t.Fatalf("network_cabinet missing: %+v", got)
+	}
+	if math.Abs(cab.Values[0]-23.0) > 1e-9 {
+		t.Errorf("network_cabinet = %v, want 23 (mean of 22 and 24, NOT sum 46)", cab.Values[0])
+	}
+	// A fire-alarm-only room still yields its own location series.
+	util, ok := byKey["utility"]
+	if !ok {
+		t.Fatalf("utility missing — a room whose only sensor is a fire alarm must still appear: %+v", got)
+	}
+	if math.Abs(util.Values[0]-20.0) > 1e-9 {
+		t.Errorf("utility = %v, want 20", util.Values[0])
+	}
+	if _, leaked := byKey["kitchen"]; leaked {
+		t.Error("kitchen leaked: winefridge is not a climate device")
+	}
+}

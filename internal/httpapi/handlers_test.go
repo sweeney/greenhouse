@@ -23,13 +23,23 @@ func (f fakeConfig) Devices() map[string]config.DeviceConfig { return f.devices 
 
 func testDevices() map[string]config.DeviceConfig {
 	return map[string]config.DeviceConfig{
+		// No environment_fields → the catalog falls back to the full registry.
 		"climate_basement": {
 			Class: "environmental_sensor", Location: "basement", DisplayName: "Basement",
 		},
+		// Explicit hint → the catalog reports exactly these.
 		"climate_weatherstation": {
 			Class: "environmental_sensor", Location: "garden", DisplayName: "Weather Station",
-			Fields: []string{"temperature_c", "humidity_pct", "pressure_hpa", "wind_speed_ms"},
+			EnvironmentFields: []string{"temperature_c", "humidity_pct", "pressure_hpa", "wind_speed_ms"},
 		},
+		// fire_alarm is charted like any other climate class. It sits in a room
+		// holding NO environmental_sensor, mirroring prod (office/utility): the
+		// room has no climate coverage at all unless fire alarms are included.
+		"firealarm_utility": {
+			Class: "fire_alarm", Location: "utility", DisplayName: "Fire Alarm: Utility",
+			EnvironmentFields: []string{"temperature_c"},
+		},
+		// Non-climate: must never appear in the catalog or a series.
 		"winefridge": {
 			Class: "continuous_power_device", Location: "kitchen", DisplayName: "Wine Fridge",
 		},
@@ -95,44 +105,92 @@ func bucketRows(t *testing.T, s *Server, deviceID, window, interval string, v fl
 
 // --- /devices ---
 
-func TestDevices_OnlyClimate(t *testing.T) {
-	s, _ := dataSetup(t)
+// catalogResp decodes GET /devices.
+type catalogResp struct {
+	Devices []struct {
+		ID                string   `json:"id"`
+		Class             string   `json:"class"`
+		Location          string   `json:"location"`
+		EnvironmentFields []string `json:"environment_fields"`
+	} `json:"devices"`
+}
+
+func getCatalog(t *testing.T, s *Server) catalogResp {
+	t.Helper()
 	w := doGET(t, s, "/devices")
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
-	var resp struct {
-		Devices []struct {
-			ID     string   `json:"id"`
-			Class  string   `json:"class"`
-			Fields []string `json:"fields"`
-		} `json:"devices"`
-	}
+	var resp catalogResp
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	// winefridge (continuous_power_device) excluded; 2 climate devices remain.
-	if len(resp.Devices) != 2 {
-		t.Fatalf("want 2 climate devices, got %d: %+v", len(resp.Devices), resp.Devices)
+	return resp
+}
+
+func TestDevices_OnlyClimate(t *testing.T) {
+	s, _ := dataSetup(t)
+	resp := getCatalog(t, s)
+
+	// winefridge (continuous_power_device) excluded; the two environmental
+	// sensors and the fire alarm remain.
+	if len(resp.Devices) != 3 {
+		t.Fatalf("want 3 climate devices, got %d: %+v", len(resp.Devices), resp.Devices)
 	}
 	for _, d := range resp.Devices {
-		if d.Class != "environmental_sensor" {
+		if d.ID == "winefridge" {
 			t.Errorf("non-climate device leaked: %s", d.ID)
 		}
-		if len(d.Fields) == 0 {
-			t.Errorf("device %s has no fields hint", d.ID)
+		if len(d.EnvironmentFields) == 0 {
+			t.Errorf("device %s has no environment_fields hint", d.ID)
 		}
 	}
-	// Weather station's explicit fields hint is used; basement falls back to registry.
+}
+
+// A fire_alarm is a first-class climate device: it appears in the catalog and
+// carries its own class, so consumers can tell it apart from a purpose-built
+// sensor if they want to.
+func TestDevices_IncludesFireAlarm(t *testing.T) {
+	s, _ := dataSetup(t)
+	resp := getCatalog(t, s)
+
+	var found bool
+	for _, d := range resp.Devices {
+		if d.ID != "firealarm_utility" {
+			continue
+		}
+		found = true
+		if d.Class != "fire_alarm" {
+			t.Errorf("class = %q, want fire_alarm (class is reported as-is)", d.Class)
+		}
+		if d.Location != "utility" {
+			t.Errorf("location = %q, want utility", d.Location)
+		}
+		if got := d.EnvironmentFields; len(got) != 1 || got[0] != "temperature_c" {
+			t.Errorf("environment_fields = %v, want [temperature_c]", got)
+		}
+	}
+	if !found {
+		t.Fatalf("fire alarm missing from catalog: %+v", resp.Devices)
+	}
+}
+
+// The environment_fields hint is used verbatim when config declares it, and
+// falls back to the full registry when it does not. The fallback deliberately
+// over-advertises; this test pins both halves so a change to either is visible.
+func TestDevices_EnvironmentFieldsHintVsFallback(t *testing.T) {
+	s, _ := dataSetup(t)
+	resp := getCatalog(t, s)
+
 	byID := map[string][]string{}
 	for _, d := range resp.Devices {
-		byID[d.ID] = d.Fields
+		byID[d.ID] = d.EnvironmentFields
 	}
 	if len(byID["climate_weatherstation"]) != 4 {
-		t.Errorf("weatherstation fields = %v, want explicit 4", byID["climate_weatherstation"])
+		t.Errorf("weatherstation = %v, want the explicit 4 from config", byID["climate_weatherstation"])
 	}
 	if len(byID["climate_basement"]) != len(climate.FieldNames()) {
-		t.Errorf("basement fields should fall back to full registry, got %v", byID["climate_basement"])
+		t.Errorf("basement should fall back to the full registry, got %v", byID["climate_basement"])
 	}
 }
 
@@ -382,10 +440,118 @@ func TestSeries_NoFilterAllClimate(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
-	// Both climate devices present; non-climate winefridge excluded.
+	// Every climate device present — including the fire alarm, which is charted
+	// like any other. Non-climate winefridge excluded.
 	keys := seriesKeys(t, w)
-	if len(keys) != 2 {
-		t.Fatalf("want 2 climate series, got %d: %v", len(keys), keys)
+	want := []string{"climate_basement", "climate_weatherstation", "firealarm_utility"}
+	if len(keys) != len(want) {
+		t.Fatalf("want %d climate series, got %d: %v", len(want), len(keys), keys)
+	}
+	for i, k := range want {
+		if keys[i] != k {
+			t.Errorf("series[%d] = %q, want %q (sorted by id)", i, keys[i], k)
+		}
+	}
+}
+
+// --- fire_alarm as a climate device (option A: class allowlist) ---
+//
+// These pin the behaviour that makes office/utility visible at all. Before the
+// fire_alarm class was charted, every one of these was a 400 or an omission.
+
+// A room whose only environment-reporting device is a fire alarm is reachable
+// via locations=. This is the whole point of including the class: without it
+// the room has no climate coverage despite live data in Influx.
+func TestSeries_LocationsFilter_FireAlarmOnlyRoom(t *testing.T) {
+	s, q := dataSetup(t)
+	q.QueryFunc = func(flux string) ([]influx.Row, error) {
+		return bucketRows(t, s, "firealarm_utility", "today", "1h", 20.21), nil
+	}
+	w := doGET(t, s, "/series?window=today&interval=1h&locations=utility")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	keys := seriesKeys(t, w)
+	if len(keys) != 1 || keys[0] != "firealarm_utility" {
+		t.Fatalf("want only firealarm_utility, got %v", keys)
+	}
+}
+
+// devices= accepts a fire alarm id rather than rejecting it as non-climate.
+func TestSeries_DevicesFilter_AcceptsFireAlarm(t *testing.T) {
+	s, q := dataSetup(t)
+	q.QueryFunc = func(flux string) ([]influx.Row, error) {
+		return bucketRows(t, s, "firealarm_utility", "today", "1h", 20.21), nil
+	}
+	w := doGET(t, s, "/series?window=today&interval=1h&devices=firealarm_utility")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	keys := seriesKeys(t, w)
+	if len(keys) != 1 || keys[0] != "firealarm_utility" {
+		t.Fatalf("want only firealarm_utility, got %v", keys)
+	}
+}
+
+// The single-device series endpoint charts a fire alarm.
+func TestDeviceSeries_FireAlarm(t *testing.T) {
+	s, q := dataSetup(t)
+	q.Responses = map[string][]influx.Row{
+		`"firealarm_utility"`: bucketRows(t, s, "firealarm_utility", "today", "1h", 20.21),
+	}
+	w := doGET(t, s, "/devices/firealarm_utility/series?window=today&interval=1h")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	keys := seriesKeys(t, w)
+	if len(keys) != 1 || keys[0] != "firealarm_utility" {
+		t.Fatalf("want one firealarm_utility series, got %v", keys)
+	}
+}
+
+// /latest works for a fire alarm too — dashboards treat it as any other sensor.
+func TestDeviceLatest_FireAlarm(t *testing.T) {
+	s, q := dataSetup(t)
+	now := s.Clock.Now()
+	q.QueryFunc = func(flux string) ([]influx.Row, error) {
+		return []influx.Row{
+			{DeviceID: "firealarm_utility", Field: "temperature_c", Value: 20.21, HasValue: true, Time: now},
+		}, nil
+	}
+	w := doGET(t, s, "/devices/firealarm_utility/latest")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Readings []struct {
+			Field string  `json:"field"`
+			Value float64 `json:"value"`
+		} `json:"readings"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Readings) != 1 || resp.Readings[0].Field != "temperature_c" {
+		t.Fatalf("want one temperature_c reading, got %+v", resp.Readings)
+	}
+	if !approx(resp.Readings[0].Value, 20.21) {
+		t.Errorf("value = %v, want 20.21", resp.Readings[0].Value)
+	}
+}
+
+// A non-climate device is still rejected — broadening the allowlist must not
+// have opened the API to every device in the namespace.
+func TestSeries_NonClimateStillRejected(t *testing.T) {
+	s, _ := dataSetup(t)
+	for _, path := range []string{
+		"/series?devices=winefridge",
+		"/devices/winefridge/series",
+		"/devices/winefridge/latest",
+	} {
+		w := doGET(t, s, path)
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%s: want 400, got %d: %s", path, w.Code, w.Body.String())
+		}
 	}
 }
 

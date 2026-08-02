@@ -18,9 +18,6 @@ const (
 	GroupByLocation = "location"
 )
 
-// environmentalClass is the device class greenhouse charts.
-const environmentalClass = "environmental_sensor"
-
 // ValueDP is the decimal precision climate values are rounded to at the response
 // boundary. Two places is plenty for °C/%/hPa/m/s/lux/index gauges and keeps
 // payloads tidy. It is the single source of truth for "how greenhouse rounds";
@@ -208,7 +205,7 @@ func assembleByDevice(
 	var out []Series
 	for _, id := range sortedDeviceIDs(devices) {
 		d := devices[id]
-		if d.Class != environmentalClass {
+		if !d.ReportsEnvironment() {
 			continue
 		}
 		label := d.DisplayName
@@ -229,7 +226,7 @@ func assembleByLocation(
 ) []Series {
 	members := map[string][]string{}
 	for id, d := range devices {
-		if d.Class != environmentalClass {
+		if !d.ReportsEnvironment() {
 			continue
 		}
 		if d.Location == "" {
@@ -319,7 +316,7 @@ func sortedDeviceIDs(devices map[string]config.DeviceConfig) []string {
 func environmentalIDs(devices map[string]config.DeviceConfig) []string {
 	var out []string
 	for _, id := range sortedDeviceIDs(devices) {
-		if devices[id].Class == environmentalClass {
+		if devices[id].ReportsEnvironment() {
 			out = append(out, id)
 		}
 	}

@@ -30,7 +30,7 @@ requires a Bearer JWT (user **or** service token).
 |---|---|
 | `GET /healthz` | status, version, uptime, influx_reachable, remote_config status |
 | `GET /openapi.json` | the OpenAPI spec as JSON |
-| `GET /devices` | climate device catalog (class `environmental_sensor`): id, display_name, location, class, and a `fields` hint |
+| `GET /devices` | climate device catalog: id, display_name, location, class, and an `environment_fields` hint |
 | `GET /devices/{id}/series` | single-device, single-field time-series |
 | `GET /series` | multi-series; `group_by` device (default) or location (mean per room) |
 | `GET /devices/{id}/latest` | the device's most recent reading across its fields (within the last 7 days) |
@@ -67,10 +67,38 @@ requires a Bearer JWT (user **or** service token).
 - `shape` — `columns` (default, shared buckets axis + per-series arrays) \|
   `rows` (flat one-row-per-(series,bucket)). Both carry `field`/`unit`/`fn`.
 
-The `fields` hint on `/devices` comes from the device config's explicit `fields`
-list when present in `statehouse_devices`, otherwise it falls back to the full
-field registry (greenhouse can't know per-device coverage without querying
-Influx; the registry is a safe superset for building a picker).
+### Which devices are charted
+
+A device from `statehouse_devices` is charted when its **class** reports
+environmental telemetry:
+
+- `environmental_sensor` — the purpose-built climate sensors and the weather
+  station.
+- `fire_alarm` — the installed alarms write `temperature_c` alongside their
+  smoke state. They are included because some rooms (office, utility) hold **no
+  `environmental_sensor` at all**, so without them those rooms have no climate
+  coverage despite live data in Influx.
+
+`class` is reported as-is on `/devices`, so a consumer can tell a purpose-built
+sensor from an alarm and weight them differently if it wants to.
+
+This is a **class allowlist**, which asserts that every device of these classes
+reports environment telemetry. That holds for the current fleet, but a future
+fire alarm model that does not report temperature would still be listed and
+would return a well-formed, permanently empty series; correcting that means
+editing `climateClasses` in `internal/config/device.go` and redeploying. The
+alternative — selecting on a non-empty `environment_fields` — would push the
+decision entirely into config; see that file's comment for the trade-off.
+
+### The `environment_fields` hint
+
+`environment_fields` on `/devices` comes from the device config key of the same
+name in `statehouse_devices`, otherwise it falls back to the full field
+registry. **The fallback over-advertises:** greenhouse can't know per-device
+coverage without querying Influx, so a device whose config omits the key appears
+to offer every field — and a series request for one it doesn't report returns
+200 with all-null buckets, indistinguishable from a sensor outage. Populating
+`environment_fields` in the namespace is what makes the catalog honest.
 
 ## Config
 
