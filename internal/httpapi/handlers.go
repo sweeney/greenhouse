@@ -152,7 +152,17 @@ func (s *Server) resolveDeviceFilter(w http.ResponseWriter, r *http.Request) (ma
 
 	q := r.URL.Query()
 	ids := splitCSV(q.Get("devices"))
-	locs := splitCSV(q.Get("locations"))
+
+	// rooms= is the current spelling; locations= is a deprecated alias kept for one
+	// release. Both filter on the same resolved place, so they select identically.
+	roomParam := "rooms"
+	locs := splitCSV(q.Get("rooms"))
+	if len(locs) == 0 {
+		if legacy := splitCSV(q.Get("locations")); len(legacy) > 0 {
+			roomParam = "locations"
+			locs = legacy
+		}
+	}
 
 	// Validate requested ids against the inventory and the climate class.
 	for _, id := range ids {
@@ -169,15 +179,15 @@ func (s *Server) resolveDeviceFilter(w http.ResponseWriter, r *http.Request) (ma
 
 	// Validate requested locations against locations that hold a climate sensor.
 	if len(locs) > 0 {
-		climateLocs := make(map[string]struct{})
+		climateRooms := make(map[string]struct{})
 		for _, d := range candidate {
-			if d.Location != "" {
-				climateLocs[d.Location] = struct{}{}
+			if p := d.Place(); p != "" {
+				climateRooms[p] = struct{}{}
 			}
 		}
 		for _, l := range locs {
-			if _, ok := climateLocs[l]; !ok {
-				writeError(w, http.StatusBadRequest, "unknown location in 'locations': "+l)
+			if _, ok := climateRooms[l]; !ok {
+				writeError(w, http.StatusBadRequest, "unknown room in '"+roomParam+"': "+l)
 				return nil, false
 			}
 		}
@@ -194,7 +204,7 @@ func (s *Server) resolveDeviceFilter(w http.ResponseWriter, r *http.Request) (ma
 			}
 		}
 		if locSet != nil {
-			if _, ok := locSet[d.Location]; !ok {
+			if _, ok := locSet[d.Place()]; !ok {
 				continue
 			}
 		}
@@ -249,7 +259,7 @@ func toSet(items []string) map[string]struct{} {
 // validGroupBy reports whether g is an accepted group_by mode.
 func validGroupBy(g string) bool {
 	switch g {
-	case climate.GroupByDevice, climate.GroupByLocation:
+	case climate.GroupByDevice, climate.GroupByRoom, climate.GroupByLocation:
 		return true
 	default:
 		return false
@@ -260,8 +270,11 @@ func validGroupBy(g string) bool {
 type catalogEntry struct {
 	ID          string `json:"id"`
 	DisplayName string `json:"display_name"`
-	Location    string `json:"location"`
-	Class       string `json:"class"`
+	// Room is the floorplan room id. Location is its deprecated spelling, emitted
+	// alongside it for one release with the same value.
+	Room     string `json:"room"`
+	Location string `json:"location"`
+	Class    string `json:"class"`
 	// EnvironmentFields mirrors the config key of the same name: the fields
 	// this device actually writes to `device_environment`. Named to match, so
 	// the catalog and the namespace describe the same thing with one word.
@@ -300,7 +313,8 @@ func (s *Server) handleDevices(w http.ResponseWriter, _ *http.Request) {
 		out = append(out, catalogEntry{
 			ID:                id,
 			DisplayName:       dev.DisplayName,
-			Location:          dev.Location,
+			Room:              dev.Place(),
+			Location:          dev.Place(),
 			Class:             dev.Class,
 			EnvironmentFields: fields,
 		})
@@ -317,7 +331,7 @@ func (s *Server) handleSeries(w http.ResponseWriter, r *http.Request) {
 		groupBy = climate.GroupByDevice
 	}
 	if !validGroupBy(groupBy) {
-		writeError(w, http.StatusBadRequest, "invalid 'group_by' (want one of device, location)")
+		writeError(w, http.StatusBadRequest, "invalid 'group_by' (want one of device, room; location is a deprecated alias for room)")
 		return
 	}
 	shape := r.URL.Query().Get("shape")

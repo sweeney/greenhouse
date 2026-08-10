@@ -96,7 +96,7 @@ paths:
       description: >
         Multi-series climate time-series over the window for one field: per-series
         values aligned to a shared bucket axis. group_by selects device (default,
-        one series per climate sensor) or location (the MEAN of a room's sensors —
+        one series per climate sensor) or room (the MEAN of a room's sensors —
         never a sum). field selects the measurement (default temperature_c); fn
         selects the per-bucket aggregation (mean default, min, max, last). The
         shape param chooses columnar (default) or row-oriented output. Empty
@@ -112,6 +112,7 @@ paths:
         - $ref: "#/components/parameters/Fn"
         - $ref: "#/components/parameters/GroupBy"
         - $ref: "#/components/parameters/Devices"
+        - $ref: "#/components/parameters/Rooms"
         - $ref: "#/components/parameters/Locations"
         - $ref: "#/components/parameters/Shape"
       responses:
@@ -324,11 +325,15 @@ components:
       required: false
       description: >
         How to group series. "device" (default) yields one series per climate
-        sensor. "location" combines a room's sensors with the MEAN of their
-        readings (never a sum).
+        sensor. "room" combines a room's sensors with the MEAN of their readings
+        (never a sum).
+
+        "location" is a DEPRECATED alias for "room", kept for one release so
+        consumers migrate independently. It returns identical numbers; only the
+        reported group_by differs.
       schema:
         type: string
-        enum: [device, location]
+        enum: [device, room, location]
         default: device
     Devices:
       name: devices
@@ -339,18 +344,29 @@ components:
         devices=climate_groundfloor,climate_firstfloor. Restricts the series to
         those climate sensors; omit for all climate devices. An unknown id, or an
         id that exists but is not a climate sensor, returns 400. Composes with
-        `locations` as AND.
+        `rooms` as AND.
+      schema:
+        type: string
+    Rooms:
+      name: rooms
+      in: query
+      required: false
+      description: >
+        CSV of floorplan room ids to chart, e.g.
+        rooms=groundfloor.kitchen,firstfloor.drawing-room. The candidate set is
+        always climate sensors only, so a non-climate device sharing a room is
+        never included; a room with no climate sensor returns 400. Composes with
+        `devices` as AND.
       schema:
         type: string
     Locations:
       name: locations
       in: query
       required: false
+      deprecated: true
       description: >
-        CSV of location tags to chart, e.g. locations=ground_floor,first_floor.
-        The candidate set is always climate sensors only, so a non-climate device
-        sharing a location is never included; a location with no climate sensor
-        returns 400. Composes with `devices` as AND.
+        DEPRECATED alias for `rooms`, kept for one release. Selects identically.
+        Ignored when `rooms` is also present.
       schema:
         type: string
     Shape:
@@ -452,11 +468,16 @@ components:
       properties:
         key:
           type: string
-          description: Series identity (device id or location).
+          description: Series identity (device id or room id).
         label:
           type: string
+        room:
+          type: string
+          description: Floorplan room id.
         location:
           type: string
+          deprecated: true
+          description: DEPRECATED alias for room, carrying the same value.
         values:
           type: array
           items:
@@ -493,7 +514,7 @@ components:
           enum: [5m, 15m, 30m, 1h, 6h, 1d]
         group_by:
           type: string
-          enum: [device, location]
+          enum: [device, room, location]
         field:
           type: string
         unit:
@@ -523,11 +544,16 @@ components:
       properties:
         key:
           type: string
-          description: Series identity (device id or location).
+          description: Series identity (device id or room id).
         label:
           type: string
+        room:
+          type: string
+          description: Floorplan room id.
         location:
           type: string
+          deprecated: true
+          description: DEPRECATED alias for room, carrying the same value.
         min:
           type: number
           nullable: true
@@ -576,7 +602,7 @@ components:
           enum: [5m, 15m, 30m, 1h, 6h, 1d]
         group_by:
           type: string
-          enum: [device, location]
+          enum: [device, room, location]
         field:
           type: string
         unit:
@@ -632,8 +658,13 @@ components:
           type: string
         display_name:
           type: string
+        room:
+          type: string
+          description: Floorplan room id.
         location:
           type: string
+          deprecated: true
+          description: DEPRECATED alias for room, carrying the same value.
         class:
           type: string
         environment_fields:
@@ -644,7 +675,7 @@ components:
             Fields this device writes to device_environment, from the config key
             of the same name. Falls back to the full field registry when config
             does not declare it, in which case it may over-advertise.
-      required: [id, display_name, location, class, environment_fields]
+      required: [id, display_name, room, location, class, environment_fields]
 
     DevicesCatalog:
       type: object

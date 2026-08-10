@@ -14,7 +14,12 @@ import (
 // group_by modes for BuildSeries / AssembleSeries. There is NO "house" or
 // "total" group: climate is non-additive, so there is nothing to total.
 const (
-	GroupByDevice   = "device"
+	GroupByDevice = "device"
+	// GroupByRoom groups by floorplan room id.
+	GroupByRoom = "room"
+	// GroupByLocation is the deprecated spelling of GroupByRoom, kept for one
+	// release so consumers migrate independently. Both produce identical numbers;
+	// only the reported group_by differs.
 	GroupByLocation = "location"
 )
 
@@ -35,8 +40,12 @@ const valueDP = ValueDP
 // There are no totals: climate is non-additive. Min/Max/Mean summarise the
 // series over the window for legends (NaN buckets are ignored).
 type Series struct {
-	Key      string `json:"key"`
-	Label    string `json:"label"`
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	// Room is the floorplan room id this series belongs to.
+	Room string `json:"room,omitempty"`
+	// Location is the deprecated spelling of Room, emitted alongside it for one
+	// release so consumers can migrate independently. Both carry the same value.
 	Location string `json:"location,omitempty"`
 
 	Values []float64 `json:"values"`
@@ -51,6 +60,7 @@ type Series struct {
 type seriesJSON struct {
 	Key      string     `json:"key"`
 	Label    string     `json:"label"`
+	Room     string     `json:"room,omitempty"`
 	Location string     `json:"location,omitempty"`
 	Values   []*float64 `json:"values"`
 	Min      *float64   `json:"min"`
@@ -65,6 +75,7 @@ func (s Series) MarshalJSON() ([]byte, error) {
 	out := seriesJSON{
 		Key:      s.Key,
 		Label:    s.Label,
+		Room:     s.Room,
 		Location: s.Location,
 		Values:   make([]*float64, len(s.Values)),
 		Min:      nullable(s.Min),
@@ -189,8 +200,8 @@ func AssembleSeries(
 	}
 
 	switch groupBy {
-	case GroupByLocation:
-		return assembleByLocation(buckets, devices, get)
+	case GroupByRoom, GroupByLocation:
+		return assembleByRoom(buckets, devices, get)
 	default: // device and unknown fall back to per-device
 		return assembleByDevice(buckets, devices, get)
 	}
@@ -212,14 +223,16 @@ func assembleByDevice(
 		if label == "" {
 			label = id
 		}
-		out = append(out, buildSeries(id, label, d.Location, buckets, [][]float64{get(id)}))
+		out = append(out, buildSeries(id, label, d.Place(), buckets, [][]float64{get(id)}))
 	}
 	return out
 }
 
-// assembleByLocation yields one series per distinct non-empty Location over
-// environmental devices, combining member readings with the per-bucket MEAN.
-func assembleByLocation(
+// assembleByRoom yields one series per distinct non-empty room over environmental
+// devices, combining member readings with the per-bucket MEAN.
+//
+// Climate is non-additive: this is the mean across a room's sensors, never a total.
+func assembleByRoom(
 	buckets []time.Time,
 	devices map[string]config.DeviceConfig,
 	get func(string) []float64,
@@ -229,10 +242,11 @@ func assembleByLocation(
 		if !d.ReportsEnvironment() {
 			continue
 		}
-		if d.Location == "" {
+		place := d.Place()
+		if place == "" {
 			continue
 		}
-		members[d.Location] = append(members[d.Location], id)
+		members[place] = append(members[place], id)
 	}
 
 	keys := make([]string, 0, len(members))
@@ -258,12 +272,14 @@ func assembleByLocation(
 // buildSeries combines member per-bucket slices with the MEAN (ignoring NaN
 // gaps), rounds every value, and computes the window summary stats. All member
 // slices are assumed to be length len(buckets) with NaN for gaps.
-func buildSeries(key, label, location string, buckets []time.Time, members [][]float64) Series {
+func buildSeries(key, label, place string, buckets []time.Time, members [][]float64) Series {
 	n := len(buckets)
 	s := Series{
-		Key:      key,
-		Label:    label,
-		Location: location,
+		Key:   key,
+		Label: label,
+		// Both spellings carry the same value during the alias period.
+		Room:     place,
+		Location: place,
 		Values:   make([]float64, n),
 	}
 	min, max, sum := math.Inf(1), math.Inf(-1), 0.0

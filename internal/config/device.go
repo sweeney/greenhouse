@@ -36,8 +36,21 @@ type DeviceConfig struct {
 
 	Class       string      `yaml:"class"            json:"class,omitempty"`
 	DisplayName string      `yaml:"display_name"     json:"display_name,omitempty"`
-	Location    string      `yaml:"location"         json:"location,omitempty"`
 	Thresholds  *Thresholds `yaml:"thresholds"       json:"thresholds,omitempty"`
+
+	// Room is the floorplan room id this device sits in, e.g.
+	// "groundfloor.kitchen". It replaces Location.
+	Room string `yaml:"room" json:"room,omitempty"`
+
+	// Location is the free-text place the device used to declare, and is
+	// DEPRECATED. It conflated at least five different things — a floor, a room,
+	// a renamed room, and the scope a reading describes — which is why the
+	// floorplan taxonomy exists.
+	//
+	// It is still decoded because the namespace and its consumers migrate
+	// independently: a devices namespace that has not been republished yet still
+	// carries `location`, and greenhouse must keep working against it.
+	Location string `yaml:"location" json:"location,omitempty"`
 
 	// EnergyStrategy is mirrored for completeness so the shared namespace
 	// round-trips; greenhouse never reads it (it is an energy concern).
@@ -92,6 +105,19 @@ type DeviceConfig struct {
 var climateClasses = map[string]struct{}{
 	"environmental_sensor": {},
 	"fire_alarm":           {},
+}
+
+// Place returns the room this device is grouped and filtered by: its Room when the
+// namespace has been migrated, otherwise its deprecated Location.
+//
+// Every grouping and filtering path goes through this one function, which is what
+// makes `room`/`rooms=` and `location`/`locations=` return identical numbers during
+// the alias period instead of merely being documented to.
+func (d DeviceConfig) Place() string {
+	if d.Room != "" {
+		return d.Room
+	}
+	return d.Location
 }
 
 // ReportsEnvironment reports whether greenhouse charts this device — i.e.

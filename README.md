@@ -14,7 +14,7 @@ and `statehouse` (real-time state), and mirrors their conventions. See
 
 - **Read-side only.** No MQTT, no ingest. Query Influx, shape for charts.
 - **Non-additive.** Climate values are bucketed and grouped with
-  **mean / min / max / last** — never summed. `group_by=location` is the **mean**
+  **mean / min / max / last** — never summed. `group_by=room` is the **mean**
   across a room's sensors, not a total.
 - **Left-edge buckets.** Flux `aggregateWindow` is called with
   `timeSrc: "_start"` so values align to the Go-owned canonical bucket axis;
@@ -30,9 +30,9 @@ requires a Bearer JWT (user **or** service token).
 |---|---|
 | `GET /healthz` | status, version, uptime, influx_reachable, remote_config status |
 | `GET /openapi.json` | the OpenAPI spec as JSON |
-| `GET /devices` | climate device catalog: id, display_name, location, class, and an `environment_fields` hint |
+| `GET /devices` | climate device catalog: id, display_name, room, class, and an `environment_fields` hint |
 | `GET /devices/{id}/series` | single-device, single-field time-series |
-| `GET /series` | multi-series; `group_by` device (default) or location (mean per room) |
+| `GET /series` | multi-series; `group_by` device (default) or room (mean per room) |
 | `GET /devices/{id}/latest` | the device's most recent reading across its fields (within the last 7 days) |
 | `GET /fields` | the field registry (name, unit, default fn) |
 
@@ -56,14 +56,16 @@ requires a Bearer JWT (user **or** service token).
   offered (non-additive). Bad fn → 400. `wind_dir_deg` is **circular** (a 0–360°
   bearing): arithmetic mean/min/max are wrong on an angular axis, so it accepts
   only `last` (and defaults to it); `mean`/`min`/`max` for it → 400.
-- `group_by` — `device` (default) \| `location`. Bad value → 400.
+- `group_by` — `device` (default) \| `room`. Bad value → 400.
+  `location` is a deprecated alias for `room`; see below.
 - `devices` — (`/series` only) CSV of device ids to chart, e.g.
   `devices=climate_groundfloor,climate_firstfloor`. Restricts the series to those
   sensors (omit for all climate devices). An unknown or non-climate id → 400.
-- `locations` — (`/series` only) CSV of location tags to chart, e.g.
-  `locations=ground_floor,first_floor`. The candidate set is always climate
-  sensors only, so a non-climate device sharing a location is never included, and
-  a location with no climate sensor → 400. Composes with `devices` as AND.
+- `rooms` — (`/series` only) CSV of floorplan room ids to chart, e.g.
+  `rooms=groundfloor.kitchen,firstfloor.drawing-room`. The candidate set is always
+  climate sensors only, so a non-climate device sharing a room is never included,
+  and a room with no climate sensor → 400. Composes with `devices` as AND.
+- `locations` — deprecated alias for `rooms`; ignored when `rooms` is also present.
 - `shape` — `columns` (default, shared buckets axis + per-series arrays) \|
   `rows` (flat one-row-per-(series,bucket)). Both carry `field`/`unit`/`fn`.
 
@@ -110,13 +112,35 @@ with two deliberately different answers:
   than padding the response with all-null lines. `field=pressure_hpa` returns
   the one series that has data, not one real line and nine empty ones. If the
   filter leaves nothing, that's a valid empty `200`, consistent with a
-  `devices=`/`locations=` intersection that matches nothing.
+  `devices=`/`rooms=` intersection that matches nothing.
 
 A device declaring no `environment_fields` is treated as **unknown coverage**
 and is never rejected or omitted. `environment_fields` is config, and config can
 be stale — if a sensor starts reporting a new field before the namespace catches
 up, greenhouse must not turn that oversight into a data outage. It only ever
 narrows on a positive declaration.
+
+## Rooms, and the deprecated `location`
+
+`location` used to mean two different things across these services — a geographic site
+and a room — so rooms are now `room`, sites are `site`, and floors are `floor`. Room ids
+are `<floor>.<slug>`: `groundfloor.kitchen`, `firstfloor.drawing-room`.
+
+For one release both spellings work everywhere:
+
+| current | deprecated alias |
+|---|---|
+| `group_by=room` | `group_by=location` |
+| `rooms=` | `locations=` |
+| `room` in responses | `location`, same value |
+
+Every grouping and filtering path resolves through one function, so the two spellings
+cannot drift: a test asserts the responses are byte-identical apart from the reported
+`group_by`. Deleting the alias must fail that test until it is deliberately updated.
+
+Greenhouse reads whichever the devices namespace carries. A namespace still declaring
+`location` keeps working untouched, which is what lets the namespace and its consumers
+migrate independently.
 
 ## Config
 

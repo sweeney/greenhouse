@@ -52,8 +52,11 @@ func (p SeriesPoint) MarshalJSON() ([]byte, error) {
 // rows so consumers still have labels and summary stats for legends without
 // scanning the row list. Min/Max/Mean are NaN for an empty series (→ null).
 type SeriesMeta struct {
-	Key      string  `json:"key"`
-	Label    string  `json:"label"`
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	// Room is the floorplan room id; Location is its deprecated spelling, carried
+	// alongside it for one release.
+	Room     string  `json:"room,omitempty"`
 	Location string  `json:"location,omitempty"`
 	Min      float64 `json:"min"`
 	Max      float64 `json:"max"`
@@ -64,6 +67,7 @@ type SeriesMeta struct {
 type seriesMetaJSON struct {
 	Key      string   `json:"key"`
 	Label    string   `json:"label"`
+	Room     string   `json:"room,omitempty"`
 	Location string   `json:"location,omitempty"`
 	Min      *float64 `json:"min"`
 	Max      *float64 `json:"max"`
@@ -75,6 +79,7 @@ func (m SeriesMeta) MarshalJSON() ([]byte, error) {
 	out := seriesMetaJSON{
 		Key:      m.Key,
 		Label:    m.Label,
+		Room:     m.Room,
 		Location: m.Location,
 		Min:      nullable(m.Min),
 		Max:      nullable(m.Max),
@@ -123,6 +128,7 @@ func (r SeriesResponse) Rows() RowsResponse {
 		out.Series = append(out.Series, SeriesMeta{
 			Key:      s.Key,
 			Label:    s.Label,
+			Room:     s.Room,
 			Location: s.Location,
 			Min:      s.Min,
 			Max:      s.Max,
