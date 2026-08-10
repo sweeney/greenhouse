@@ -24,7 +24,6 @@
     {
       "key": "basement.garden",
       "label": "basement.garden",
-      "location": "basement.garden",
       "max": null,
       "mean": null,
       "min": null,
@@ -49,7 +48,6 @@
     {
       "key": "basement.hallway",
       "label": "basement.hallway",
-      "location": "basement.hallway",
       "max": 20,
       "mean": 20,
       "min": 20,
@@ -74,7 +72,6 @@
     {
       "key": "basement.utility",
       "label": "basement.utility",
-      "location": "basement.utility",
       "max": null,
       "mean": null,
       "min": null,

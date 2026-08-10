@@ -55,8 +55,8 @@ func TestAssembleSeries_ByDevice(t *testing.T) {
 	if got[0].Values[0] != 18 || got[0].Values[2] != 20 {
 		t.Errorf("basement values = %v", got[0].Values)
 	}
-	if got[0].Location != "basement" {
-		t.Errorf("basement location = %q", got[0].Location)
+	if got[0].Room != "basement" {
+		t.Errorf("basement room = %q", got[0].Room)
 	}
 	// Summary stats.
 	if got[0].Min != 18 || got[0].Max != 20 || got[0].Mean != 19 {
@@ -64,10 +64,10 @@ func TestAssembleSeries_ByDevice(t *testing.T) {
 	}
 }
 
-// TestAssembleSeries_ByLocationMeansNotSums is the defining greenhouse test:
+// TestAssembleSeries_ByRoomMeansNotSums is the defining greenhouse test:
 // two sensors in the same room combine as the MEAN of their readings, never the
 // sum. (Summing temperatures would be physically meaningless.)
-func TestAssembleSeries_ByLocationMeansNotSums(t *testing.T) {
+func TestAssembleSeries_ByRoomMeansNotSums(t *testing.T) {
 	buckets := make([]time.Time, 2)
 	base := time.Date(2026, 6, 11, 0, 0, 0, 0, time.UTC)
 	for i := range buckets {
@@ -81,7 +81,7 @@ func TestAssembleSeries_ByLocationMeansNotSums(t *testing.T) {
 		"climate_office":      {30, 10}, // office member B
 	})
 
-	got := AssembleSeries(buckets, devices, v, GroupByLocation)
+	got := AssembleSeries(buckets, devices, v, GroupByRoom)
 	// Locations: basement, groundfloor, office (sorted).
 	byKey := map[string]Series{}
 	for _, s := range got {
@@ -361,7 +361,7 @@ func TestAssembleSeries_ByLocation_MeansAcrossMixedClasses(t *testing.T) {
 		"glowsensorth1":     {22.0},
 		"firealarm_network": {24.0},
 		"firealarm_utility": {20.0},
-	}), GroupByLocation)
+	}), GroupByRoom)
 
 	byKey := map[string]Series{}
 	for _, s := range got {

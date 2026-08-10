@@ -57,7 +57,6 @@ requires a Bearer JWT (user **or** service token).
   bearing): arithmetic mean/min/max are wrong on an angular axis, so it accepts
   only `last` (and defaults to it); `mean`/`min`/`max` for it → 400.
 - `group_by` — `device` (default) \| `room`. Bad value → 400.
-  `location` is a deprecated alias for `room`; see below.
 - `devices` — (`/series` only) CSV of device ids to chart, e.g.
   `devices=climate_groundfloor,climate_firstfloor`. Restricts the series to those
   sensors (omit for all climate devices). An unknown or non-climate id → 400.
@@ -65,7 +64,6 @@ requires a Bearer JWT (user **or** service token).
   `rooms=groundfloor.kitchen,firstfloor.drawing-room`. The candidate set is always
   climate sensors only, so a non-climate device sharing a room is never included,
   and a room with no climate sensor → 400. Composes with `devices` as AND.
-- `locations` — deprecated alias for `rooms`; ignored when `rooms` is also present.
 - `shape` — `columns` (default, shared buckets axis + per-series arrays) \|
   `rows` (flat one-row-per-(series,bucket)). Both carry `field`/`unit`/`fn`.
 
@@ -126,17 +124,8 @@ narrows on a positive declaration.
 and a room — so rooms are now `room`, sites are `site`, and floors are `floor`. Room ids
 are `<floor>.<slug>`: `groundfloor.kitchen`, `firstfloor.drawing-room`.
 
-For one release both spellings work everywhere:
-
-| current | deprecated alias |
-|---|---|
-| `group_by=room` | `group_by=location` |
-| `rooms=` | `locations=` |
-| `room` in responses | `location`, same value |
-
-Every grouping and filtering path resolves through one function, so the two spellings
-cannot drift: a test asserts the responses are byte-identical apart from the reported
-`group_by`. Deleting the alias must fail that test until it is deliberately updated.
+The deprecated `location` spelling has been removed: `group_by=location`, `locations=`
+and the `location` response field are all gone. Use `group_by=room`, `rooms=` and `room`.
 
 Greenhouse reads whichever the devices namespace carries. A namespace still declaring
 `location` keeps working untouched, which is what lets the namespace and its consumers

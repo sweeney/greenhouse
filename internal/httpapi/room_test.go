@@ -15,8 +15,8 @@ import (
 // as deprecated aliases for one release so consumers migrate independently — the desktop
 // client ships through an app store review and is the slowest lane.
 //
-// The alias promise is enforced here rather than documented: both spellings must return
-// the same numbers, differing only in the reported group_by.
+// The deprecated `location` spelling has now been removed (step 11), so what remains
+// here pins the room behaviour itself.
 
 // roomDevices mirrors testDevices but with the published room ids the devices namespace
 // will carry after the migration.
@@ -70,63 +70,6 @@ func TestSeries_GroupByRoomKeysOnRoomIDs(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("no series keyed on the room id: %+v", resp.Series)
-	}
-}
-
-// TestGroupByRoomAndLocationAreEquivalent is the alias-period contract: the two spellings
-// return the same numbers, and only the reported group_by differs.
-func TestGroupByRoomAndLocationAreEquivalent(t *testing.T) {
-	s, q := dataSetup(t)
-	s.Config = fakeConfig{devices: roomDevices()}
-	q.QueryFunc = func(string) ([]influx.Row, error) {
-		return bucketRows(t, s, "climate_basement", "today", "1h", 20), nil
-	}
-
-	byRoom := doGET(t, s, "/series?window=today&interval=1h&group_by=room")
-	byLocation := doGET(t, s, "/series?window=today&interval=1h&group_by=location")
-
-	if byRoom.Code != http.StatusOK || byLocation.Code != http.StatusOK {
-		t.Fatalf("codes: room=%d location=%d", byRoom.Code, byLocation.Code)
-	}
-
-	var a, b map[string]any
-	if err := json.Unmarshal(byRoom.Body.Bytes(), &a); err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(byLocation.Body.Bytes(), &b); err != nil {
-		t.Fatal(err)
-	}
-	if a["group_by"] != "room" || b["group_by"] != "location" {
-		t.Errorf("group_by: room response %v, location response %v", a["group_by"], b["group_by"])
-	}
-	delete(a, "group_by")
-	delete(b, "group_by")
-
-	ja, _ := json.Marshal(a)
-	jb, _ := json.Marshal(b)
-	if string(ja) != string(jb) {
-		t.Errorf("the alias returns different data\n room: %s\n  loc: %s", ja, jb)
-	}
-}
-
-func TestRoomsFilterSelectsTheSameDevicesAsLocations(t *testing.T) {
-	s, q := dataSetup(t)
-	s.Config = fakeConfig{devices: roomDevices()}
-	q.QueryFunc = func(string) ([]influx.Row, error) {
-		return bucketRows(t, s, "climate_basement", "today", "1h", 20), nil
-	}
-
-	byRooms := doGET(t, s, "/series?window=today&interval=1h&rooms=basement.hallway")
-	byLocations := doGET(t, s, "/series?window=today&interval=1h&locations=basement.hallway")
-
-	if byRooms.Code != http.StatusOK {
-		t.Fatalf("rooms= want 200, got %d: %s", byRooms.Code, byRooms.Body.String())
-	}
-	if byLocations.Code != http.StatusOK {
-		t.Fatalf("locations= want 200, got %d: %s", byLocations.Code, byLocations.Body.String())
-	}
-	if byRooms.Body.String() != byLocations.Body.String() {
-		t.Error("rooms= and locations= selected different devices")
 	}
 }
 

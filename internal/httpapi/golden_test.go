@@ -12,19 +12,14 @@ import (
 
 var updateGolden = flag.Bool("update-golden", false, "rewrite the golden alias snapshots")
 
-// the floorplan migration plan (§11.5 of floorplan/docs/PLAN.md): the deprecated `location` spelling is a promise, and a promise needs
-// enforcing rather than documenting. These snapshots pin exactly what it returns.
-//
-// Removing the alias must fail these tests until they are deliberately regenerated with
-// -update-golden, so it cannot happen by accident — which matters because the desktop client
-// ships through Xcode and is the slowest lane to migrate.
+// These snapshots pinned the deprecated `location` spelling until it was removed in
+// step 11 of the floorplan migration. The alias cases were deleted deliberately, and
+// their golden files with them; what remains pins the room responses.
 func TestGoldenDeprecatedAliasResponses(t *testing.T) {
 	cases := []struct {
 		name string
 		path string
 	}{
-		{"group-by-location", "/series?window=today&interval=1h&group_by=location"},
-		{"locations-filter", "/series?window=today&interval=1h&locations=basement.hallway"},
 		{"group-by-room", "/series?window=today&interval=1h&group_by=room"},
 		{"rooms-filter", "/series?window=today&interval=1h&rooms=basement.hallway"},
 	}

@@ -111,7 +111,7 @@ type catalogResp struct {
 	Devices []struct {
 		ID                string   `json:"id"`
 		Class             string   `json:"class"`
-		Location          string   `json:"location"`
+		Room              string   `json:"room"`
 		EnvironmentFields []string `json:"environment_fields"`
 	} `json:"devices"`
 }
@@ -164,8 +164,8 @@ func TestDevices_IncludesFireAlarm(t *testing.T) {
 		if d.Class != "fire_alarm" {
 			t.Errorf("class = %q, want fire_alarm (class is reported as-is)", d.Class)
 		}
-		if d.Location != "utility" {
-			t.Errorf("location = %q, want utility", d.Location)
+		if d.Room != "utility" {
+			t.Errorf("room = %q, want utility", d.Room)
 		}
 		if got := d.EnvironmentFields; len(got) != 1 || got[0] != "temperature_c" {
 			t.Errorf("environment_fields = %v, want [temperature_c]", got)
@@ -366,7 +366,7 @@ func TestDeviceSeries_WindDirCircular(t *testing.T) {
 
 // --- /series ---
 
-func TestSeries_GroupByLocationMean(t *testing.T) {
+func TestSeries_GroupByRoomMean(t *testing.T) {
 	s, q := dataSetup(t)
 	// Two sensors in the same room (office) to prove mean-not-sum end to end.
 	devs := testDevices()
@@ -382,7 +382,7 @@ func TestSeries_GroupByLocationMean(t *testing.T) {
 		return append(append([]influx.Row{}, rowsA...), rowsB...), nil
 	}
 
-	w := doGET(t, s, "/series?window=today&interval=1h&group_by=location")
+	w := doGET(t, s, "/series?window=today&interval=1h&group_by=room")
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -396,7 +396,7 @@ func TestSeries_GroupByLocationMean(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.GroupBy != "location" {
+	if resp.GroupBy != "room" {
 		t.Errorf("group_by = %q", resp.GroupBy)
 	}
 	var office *struct {
@@ -549,14 +549,14 @@ func TestSeries_AllDevicesOmittedIsEmpty200(t *testing.T) {
 // fire_alarm class was charted, every one of these was a 400 or an omission.
 
 // A room whose only environment-reporting device is a fire alarm is reachable
-// via locations=. This is the whole point of including the class: without it
+// via rooms=. This is the whole point of including the class: without it
 // the room has no climate coverage despite live data in Influx.
-func TestSeries_LocationsFilter_FireAlarmOnlyRoom(t *testing.T) {
+func TestSeries_RoomsFilter_FireAlarmOnlyRoom(t *testing.T) {
 	s, q := dataSetup(t)
 	q.QueryFunc = func(flux string) ([]influx.Row, error) {
 		return bucketRows(t, s, "firealarm_utility", "today", "1h", 20.21), nil
 	}
-	w := doGET(t, s, "/series?window=today&interval=1h&locations=utility")
+	w := doGET(t, s, "/series?window=today&interval=1h&rooms=utility")
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -659,12 +659,12 @@ func TestSeries_DevicesFilter(t *testing.T) {
 	}
 }
 
-func TestSeries_LocationsFilter(t *testing.T) {
+func TestSeries_RoomsFilter(t *testing.T) {
 	s, q := dataSetup(t)
 	q.QueryFunc = func(flux string) ([]influx.Row, error) {
 		return bucketRows(t, s, "climate_weatherstation", "today", "1h", 15), nil
 	}
-	w := doGET(t, s, "/series?window=today&interval=1h&locations=garden")
+	w := doGET(t, s, "/series?window=today&interval=1h&rooms=garden")
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -680,8 +680,8 @@ func TestSeries_FiltersComposeAND(t *testing.T) {
 		return bucketRows(t, s, "climate_weatherstation", "today", "1h", 15), nil
 	}
 	// Both climate devices requested, but only the garden one survives the
-	// location filter — devices= and locations= compose as AND.
-	w := doGET(t, s, "/series?window=today&interval=1h&devices=climate_basement,climate_weatherstation&locations=garden")
+	// location filter — devices= and rooms= compose as AND.
+	w := doGET(t, s, "/series?window=today&interval=1h&devices=climate_basement,climate_weatherstation&rooms=garden")
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -708,11 +708,11 @@ func TestSeries_NonClimateDeviceFilter(t *testing.T) {
 	}
 }
 
-func TestSeries_UnknownLocationFilter(t *testing.T) {
+func TestSeries_UnknownRoomFilter(t *testing.T) {
 	s, _ := dataSetup(t)
 	// kitchen holds only winefridge (non-climate), so as far as the climate API
 	// is concerned the location does not exist → 400, not a silent empty series.
-	w := doGET(t, s, "/series?locations=kitchen")
+	w := doGET(t, s, "/series?rooms=kitchen")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400 for climate-free location, got %d: %s", w.Code, w.Body.String())
 	}
