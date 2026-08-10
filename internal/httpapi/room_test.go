@@ -11,8 +11,8 @@ import (
 
 // The floorplan migration renames the read-side vocabulary: `location` meant both a
 // geographic site and a room, so rooms are now `room`. `location` and `locations=` stay
-// as deprecated aliases for one release so consumers migrate independently — the desktop client
-// ships through Xcode and is the slowest lane.
+// as deprecated aliases for one release so consumers migrate independently — the desktop
+// client ships through an app store review and is the slowest lane.
 //
 // The alias promise is enforced here rather than documented: both spellings must return
 // the same numbers, differing only in the reported group_by.
