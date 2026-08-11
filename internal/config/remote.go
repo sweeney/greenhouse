@@ -31,8 +31,9 @@ type NamespaceStatus struct {
 	Error     string    `json:"error,omitempty"`
 }
 
-// Fetcher fetches the single remote config namespace greenhouse depends on
-// (statehouse_devices) and HOLDS it as a live snapshot.
+// Fetcher fetches the devices namespace greenhouse depends on — named by
+// cfg.Site.DevicesNamespace, defaulting to the shared pre-migration
+// statehouse_devices — and HOLDS it as a live snapshot.
 //
 // Greenhouse is read-side and stateless: the Fetcher is the authoritative
 // in-memory view that the HTTP handlers query via the ConfigProvider interface
@@ -51,6 +52,11 @@ type Fetcher struct {
 	HTTPClient *http.Client
 	Logger     *slog.Logger
 
+	// DevicesNamespace names the namespace holding this site's devices. Empty means
+	// the shared pre-migration document, so a Fetcher built without it behaves
+	// exactly as it did before devices were split per site.
+	DevicesNamespace string
+
 	mu       sync.RWMutex
 	devices  map[string]DeviceConfig
 	statuses map[string]NamespaceStatus
@@ -62,10 +68,7 @@ var defaultFetchClient = &http.Client{Timeout: 10 * time.Second}
 // maxConfigBytes is the maximum response body size accepted from the config service.
 const maxConfigBytes = 1 << 20 // 1 MiB
 
-// nsDevices is the only namespace greenhouse fetches from the config service.
-const nsDevices = "statehouse_devices"
-
-// Devices returns a copy of the current statehouse_devices snapshot keyed by
+// Devices returns a copy of the current devices snapshot keyed by
 // device_id. Safe for concurrent use. Implements httpapi.ConfigProvider.
 func (f *Fetcher) Devices() map[string]DeviceConfig {
 	f.mu.RLock()
@@ -89,7 +92,8 @@ func (f *Fetcher) Statuses() map[string]NamespaceStatus {
 	return out
 }
 
-// Refresh fetches statehouse_devices and swaps the held snapshot on success.
+// Refresh fetches the configured devices namespace and swaps the held snapshot
+// on success.
 // Fail-open: on any error the previous snapshot is kept and a per-namespace
 // status is recorded. Refresh never panics.
 func (f *Fetcher) Refresh(ctx context.Context) {
@@ -104,7 +108,7 @@ func (f *Fetcher) Refresh(ctx context.Context) {
 	token, err := f.Tokens.Token(ctx)
 	if err != nil {
 		f.warn("remote config: identity token fetch failed, keeping last-known snapshot", "error", err)
-		f.recordStatus(nsDevices, err)
+		f.recordStatus(f.devicesNamespace(), err)
 		return
 	}
 	f.refreshDevices(ctx, token)
@@ -112,9 +116,10 @@ func (f *Fetcher) Refresh(ctx context.Context) {
 
 func (f *Fetcher) refreshDevices(ctx context.Context, token string) {
 	var devices map[string]DeviceConfig
-	if err := f.fetch(ctx, token, nsDevices, &devices); err != nil {
-		f.warn("remote config: statehouse_devices unavailable, keeping last-known", "error", err)
-		f.recordStatus(nsDevices, err)
+	if err := f.fetch(ctx, token, f.devicesNamespace(), &devices); err != nil {
+		f.warn("remote config: devices namespace unavailable, keeping last-known",
+			"namespace", f.devicesNamespace(), "error", err)
+		f.recordStatus(f.devicesNamespace(), err)
 		return
 	}
 	if devices == nil {
@@ -124,7 +129,7 @@ func (f *Fetcher) refreshDevices(ctx context.Context, token string) {
 	f.mu.Lock()
 	f.devices = devices
 	f.mu.Unlock()
-	f.recordStatus(nsDevices, nil)
+	f.recordStatus(f.devicesNamespace(), nil)
 }
 
 func (f *Fetcher) recordStatus(ns string, err error) {
@@ -165,7 +170,7 @@ func (f *Fetcher) fetch(ctx context.Context, token, ns string, dst any) error {
 	}
 	if resp.StatusCode != http.StatusOK {
 		io.Copy(io.Discard, resp.Body) //nolint:errcheck
-		return fmt.Errorf("unexpected status %d", resp.StatusCode)
+		return fmt.Errorf("namespace %s: unexpected status %d", ns, resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxConfigBytes+1))
@@ -185,4 +190,13 @@ func (f *Fetcher) warn(msg string, args ...any) {
 	if f.Logger != nil {
 		f.Logger.Warn(msg, args...)
 	}
+}
+
+// devicesNamespace is the namespace this fetcher reads devices from, defaulting to
+// the shared pre-migration document when config names none.
+func (f *Fetcher) devicesNamespace() string {
+	if f.DevicesNamespace != "" {
+		return f.DevicesNamespace
+	}
+	return DefaultDevicesNamespace
 }

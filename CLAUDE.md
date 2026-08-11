@@ -57,8 +57,9 @@ shapes, the Influx Querier + fake, the Server/auth/CORS/spec skeleton, the confi
 ## Config & auth (see PLAN §7)
 
 - Config is remote at `config.swee.net` (`GET /api/v1/config/{namespace}`), overlaid on local YAML
-  (`/etc/greenhouse/config.yaml`). Greenhouse reads **`statehouse_devices` only** — it does NOT use
-  `energy_tariffs`. Fetches are fail-open (log + keep last-known) with SIGHUP reload.
+  (`/etc/greenhouse/config.yaml`). Greenhouse reads **one devices namespace only** — named by `site.devices_namespace`,
+  defaulting to `statehouse_devices` — and does NOT use `energy_tariffs`. `/healthz`'s
+  `remote_config` block is keyed by whichever namespace is actually read. Fetches are fail-open (log + keep last-known) with SIGHUP reload.
 - Auth via `github.com/sweeney/identity/common` **v0.3.0**: `auth.JWKSVerifier` verifies inbound
   tokens (JWKS); `auth.TokenSource` is the shared outbound `client_credentials` source (no local
   copy — it was extracted to common in v0.3.0). **Accept service tokens** (`ParseServiceToken`) as

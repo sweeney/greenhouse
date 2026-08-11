@@ -144,6 +144,18 @@ migrate independently.
 
 ## Config
 
+The devices namespace is named by config, so a site reads its own:
+
+```yaml
+site:
+  id: home
+  devices_namespace: devices_home
+```
+
+It defaults to `statehouse_devices` — the shared namespace every service read before
+devices were split per site — so an unedited config keeps reading what it always read.
+
+
 Local YAML (`/etc/greenhouse/config.yaml`, see `config/config.example.yaml`):
 `http.listen`, `influx{url,org,bucket,token_file}`,
 `identity{base_url,client_id,client_secret}`, `remote_config.base_url`,

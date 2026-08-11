@@ -24,6 +24,13 @@ import (
 // Go-owned canonical left-edge axis. The Go layer demuxes rows onto that axis
 // and zero/NaN-fills gaps. No pad is needed — a bucket aggregate is
 // self-contained (unlike countinghouse's counter difference()).
+//
+// NOT filtered by site, and that is deliberate rather than forgotten — see #13.
+// statehouse tags every point with its site, but only since 2026-08-10, so a bare
+// `r.site == <id>` would exclude every earlier point and silently empty out the
+// history. Correct scoping needs the operator to declare which site owns the untagged
+// history, which is a config change, not a change to this query. Harmless while one
+// site writes to the bucket; must land before a second one does.
 func BuildFieldSeriesFlux(bucket string, deviceIDs []string, field, fn string, start, stop time.Time, interval, tz string) string {
 	return fmt.Sprintf(`import "timezone"
 
