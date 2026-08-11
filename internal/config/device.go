@@ -117,8 +117,20 @@ func (d DeviceConfig) Place() string {
 	if d.Room != "" {
 		return d.Room
 	}
+	if d.Location == CoverageHouse {
+		return ""
+	}
 	return d.Location
 }
+
+// CoverageHouse is the legacy `location` value meaning a device's readings describe
+// the whole property rather than the room it sits in.
+//
+// That field carried two different facts — usually a place, but `house` was always a
+// scope — which is the conflation the floorplan migration removes. Resolving it as a
+// room would key a series on `house`, which the taxonomy forbids as a room id: it is
+// a reserved series key.
+const CoverageHouse = "house"
 
 // ReportsEnvironment reports whether greenhouse charts this device — i.e.
 // whether its class writes to the `device_environment` measurement. It is the
