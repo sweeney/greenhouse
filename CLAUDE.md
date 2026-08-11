@@ -17,7 +17,7 @@ shapes, the Influx Querier + fake, the Server/auth/CORS/spec skeleton, the confi
 - **Stateless w.r.t. accumulation.** Derive answers on query; survive restart with zero data loss.
   The durable truth is statehouse's writes to Influx. Any cache must be rebuildable from Influx.
 - **Climate is NON-additive.** You never *sum* temperatures. Bucket and group with **mean / min /
-  max / last** — this is the defining difference from countinghouse's additive kWh. `group_by=location`
+  max / last** — this is the defining difference from countinghouse's additive kWh. `group_by=room`
   means the **mean** across a room's sensors, not a total.
 - **Bucket alignment.** Influx `aggregateWindow` stamps the right edge by default, which shifts every
   value one bucket late. Builders MUST set `timeSrc: "_start"` (left-edge), matching the Go-owned

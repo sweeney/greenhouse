@@ -88,7 +88,7 @@ e.g. `temperature_c`→{°C, mean}, `humidity_pct`→{%, mean}, `rainfall_mm`→
 keep mean per bucket for v1; rainfall is genuinely additive but treat uniformly as a gauge for
 the scaffold and revisit}, etc. Allowed `fn`: `mean` (default), `min`, `max`, `last`.
 
-**Aggregation across group members** (e.g. a room with >1 sensor, or `group_by=location`):
+**Aggregation across group members** (e.g. a room with >1 sensor, or `group_by=room`):
 the group value per bucket is the **mean of the member readings** — NOT a sum. This is the
 defining difference from countinghouse's `AssembleSeries`.
 
@@ -102,9 +102,9 @@ public; everything else requires a Bearer JWT (user **or** service token, via `c
 |---|---|---|
 | `GET /healthz` | public | status, version, uptime, influx_reachable, remote_config status |
 | `GET /openapi.json` | public | spec (path-coverage test enforced) |
-| `GET /devices` | yes | climate device catalog: id, display_name, location, class, `environment_fields` (which it reports) |
+| `GET /devices` | yes | climate device catalog: id, display_name, room, class, `environment_fields` (which it reports) |
 | `GET /devices/{id}/series?window=&interval=&field=&fn=&shape=` | yes | single-device, single-field time-series (columnar or rows), with `unit` |
-| `GET /series?window=&interval=&field=&fn=&group_by=&shape=` | yes | multi-series; `group_by`: `device` (default), `location` (mean per room) |
+| `GET /series?window=&interval=&field=&fn=&group_by=&shape=` | yes | multi-series; `group_by`: `device` (default), `room` (mean per room); `location` is a deprecated alias |
 | `GET /devices/{id}/latest` | yes | the device's most recent reading across all its fields (for dashboards) |
 | `GET /fields` | yes | the field registry (name, unit, default fn) so consumers can build pickers |
 
@@ -135,7 +135,7 @@ staticcheck/spectral). House rule: keep openapi.yaml + README in sync with endpo
    (field+fn parameterised, timeSrc:"_start") — tested.
 3. **Windowing + interval** — copied from countinghouse, tested (DST).
 4. **Climate series core** — fields registry, bucket axis/demux, `AssembleSeries` (mean/min/max,
-   non-additive, group_by device|location), columnar+rows, units — tested.
+   non-additive, group_by device|room), columnar+rows, units — tested.
 5. **HTTP server** — Server/healthz/openapi/path-coverage + dual-token auth + CORS.
 6. **Handlers** — /devices, /series, /devices/{id}/series, /devices/{id}/latest, /fields.
 7. **Fetcher (statehouse_devices) + main.go** — SIGHUP, graceful shutdown.
