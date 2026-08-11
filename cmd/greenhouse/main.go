@@ -2,8 +2,8 @@
 // service.
 //
 // Startup: load local config, build the outbound identity TokenSource and the
-// remote-config Fetcher (statehouse_devices only, refreshed once with a
-// timeout, fail-open), build the Influx query client, then serve the HTTP API
+// remote-config Fetcher (the devices namespace named by site config, refreshed
+// once with a timeout, fail-open), build the Influx query client, then serve the HTTP API
 // until SIGINT/SIGTERM. SIGHUP re-refreshes remote config in place without a
 // restart.
 package main
@@ -39,6 +39,12 @@ func main() {
 	if err != nil {
 		logger.Error("load config", "error", err)
 		os.Exit(1)
+	}
+	// Legal but probably-unintended config. Not fatal: every one of these runs
+	// correctly for the site deployed today, and the whole point of the site block
+	// is that adding a second property must not be able to take down the first.
+	for _, w := range cfg.Warnings() {
+		logger.Warn("config: " + w)
 	}
 
 	// Secure-by-default: refuse to boot unauthenticated unless explicitly opted
@@ -85,21 +91,24 @@ func main() {
 	location := cfg.House.Location()
 
 	server := &httpapi.Server{
-		Listen:       cfg.HTTP.Listen,
-		Influx:       influxClient,
-		Bucket:       cfg.Influx.Bucket,
-		Clock:        testutil.RealClock{},
-		Loc:          location,
-		Config:       fetcher,
-		RemoteConfig: fetcher,
-		IdentityURL:  cfg.Identity.BaseURL,
-		PublicURL:    cfg.HTTP.PublicURL,
-		Version:      version,
-		Logger:       logger,
+		Listen:           cfg.HTTP.Listen,
+		Influx:           influxClient,
+		Bucket:           cfg.Influx.Bucket,
+		Clock:            testutil.RealClock{},
+		Loc:              location,
+		Config:           fetcher,
+		RemoteConfig:     fetcher,
+		IdentityURL:      cfg.Identity.BaseURL,
+		PublicURL:        cfg.HTTP.PublicURL,
+		Version:          version,
+		SiteID:           cfg.Site.ID,
+		DevicesNamespace: cfg.Site.DevicesNamespace,
+		Logger:           logger,
 	}
 
 	logger.Info("starting", "config", *configPath, "http", cfg.HTTP.Listen,
-		"influx", cfg.Influx.URL, "timezone", cfg.House.Timezone, "version", version)
+		"influx", cfg.Influx.URL, "timezone", cfg.House.Timezone, "version", version,
+		"site", cfg.Site.ID, "devices_namespace", cfg.Site.DevicesNamespace)
 
 	ctx, cancel := signalContext()
 	defer cancel()

@@ -31,8 +31,9 @@ type NamespaceStatus struct {
 	Error     string    `json:"error,omitempty"`
 }
 
-// Fetcher fetches the single remote config namespace greenhouse depends on
-// (statehouse_devices) and HOLDS it as a live snapshot.
+// Fetcher fetches the devices namespace greenhouse depends on — named by
+// cfg.Site.DevicesNamespace, defaulting to the shared pre-migration
+// statehouse_devices — and HOLDS it as a live snapshot.
 //
 // Greenhouse is read-side and stateless: the Fetcher is the authoritative
 // in-memory view that the HTTP handlers query via the ConfigProvider interface
@@ -67,12 +68,7 @@ var defaultFetchClient = &http.Client{Timeout: 10 * time.Second}
 // maxConfigBytes is the maximum response body size accepted from the config service.
 const maxConfigBytes = 1 << 20 // 1 MiB
 
-// nsDevices is the only namespace greenhouse fetches from the config service.
-// nsDevices is the namespace read when config names none, i.e. the shared
-// pre-migration document. The name is otherwise taken from cfg.Site.
-const nsDevices = DefaultDevicesNamespace
-
-// Devices returns a copy of the current statehouse_devices snapshot keyed by
+// Devices returns a copy of the current devices snapshot keyed by
 // device_id. Safe for concurrent use. Implements httpapi.ConfigProvider.
 func (f *Fetcher) Devices() map[string]DeviceConfig {
 	f.mu.RLock()
@@ -96,7 +92,8 @@ func (f *Fetcher) Statuses() map[string]NamespaceStatus {
 	return out
 }
 
-// Refresh fetches statehouse_devices and swaps the held snapshot on success.
+// Refresh fetches the configured devices namespace and swaps the held snapshot
+// on success.
 // Fail-open: on any error the previous snapshot is kept and a per-namespace
 // status is recorded. Refresh never panics.
 func (f *Fetcher) Refresh(ctx context.Context) {
@@ -120,7 +117,8 @@ func (f *Fetcher) Refresh(ctx context.Context) {
 func (f *Fetcher) refreshDevices(ctx context.Context, token string) {
 	var devices map[string]DeviceConfig
 	if err := f.fetch(ctx, token, f.devicesNamespace(), &devices); err != nil {
-		f.warn("remote config: statehouse_devices unavailable, keeping last-known", "error", err)
+		f.warn("remote config: devices namespace unavailable, keeping last-known",
+			"namespace", f.devicesNamespace(), "error", err)
 		f.recordStatus(f.devicesNamespace(), err)
 		return
 	}
@@ -172,7 +170,7 @@ func (f *Fetcher) fetch(ctx context.Context, token, ns string, dst any) error {
 	}
 	if resp.StatusCode != http.StatusOK {
 		io.Copy(io.Discard, resp.Body) //nolint:errcheck
-		return fmt.Errorf("unexpected status %d", resp.StatusCode)
+		return fmt.Errorf("namespace %s: unexpected status %d", ns, resp.StatusCode)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxConfigBytes+1))
@@ -200,5 +198,5 @@ func (f *Fetcher) devicesNamespace() string {
 	if f.DevicesNamespace != "" {
 		return f.DevicesNamespace
 	}
-	return nsDevices
+	return DefaultDevicesNamespace
 }

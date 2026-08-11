@@ -76,7 +76,25 @@ else
 fi
 
 echo "=== Config ==="
+# Guarded, as statehouse's installer is: this heredoc is the whole file, so an
+# unconditional re-run silently reverts every hand edit made on the host — including
+# the site block below, taking the client_secret with it. A bootstrap that undoes the
+# operator's configuration is worse than one that declines to run twice.
+if [ -f /etc/$SERVICE/config.yaml ]; then
+echo "  /etc/$SERVICE/config.yaml exists, leaving it alone"
+echo "  (delete it first if you want this script to write a fresh one)"
+else
 cat > /etc/$SERVICE/config.yaml <<CONFIG
+# The property this instance serves. Replace the id with the site's id from the
+# `sites` namespace, and name this site's devices namespace once it is published
+# (e.g. devices_home). Until it is named, the shared pre-migration namespace is read
+# and startup logs a warning saying so — the intended nudge, not a fault. It is
+# spelled out rather than derived from the id so a typo is a complaint at startup
+# instead of a successful fetch of nothing.
+site:
+  id: "REPLACE_ME"
+  # devices_namespace: "devices_REPLACE_ME"
+
 http:
   listen: ":$PORT"
   public_url: "https://$SERVICE.swee.net"
@@ -106,6 +124,7 @@ auth:
 CONFIG
 chown root:$SERVICE /etc/$SERVICE/config.yaml; chmod 640 /etc/$SERVICE/config.yaml
 echo "  wrote /etc/$SERVICE/config.yaml (listen :$PORT)"
+fi
 
 echo "=== systemd unit ==="
 # KEEP IN SYNC with deploy/greenhouse.service
