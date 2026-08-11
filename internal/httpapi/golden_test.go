@@ -12,7 +12,7 @@ import (
 
 var updateGolden = flag.Bool("update-golden", false, "rewrite the golden alias snapshots")
 
-// PLAN.md §11.5: the deprecated `location` spelling is a promise, and a promise needs
+// the floorplan migration plan (§11.5 of floorplan/docs/PLAN.md): the deprecated `location` spelling is a promise, and a promise needs
 // enforcing rather than documenting. These snapshots pin exactly what it returns.
 //
 // Removing the alias must fail these tests until they are deliberately regenerated with

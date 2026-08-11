@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/sweeney/greenhouse/internal/config"
@@ -137,7 +138,7 @@ func TestUnknownRoomIsA400(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d: %s", w.Code, w.Body.String())
 	}
-	if !contains(w.Body.String(), "rooms") {
+	if !strings.Contains(w.Body.String(), "rooms") {
 		t.Errorf("the error must name the parameter the caller used: %s", w.Body.String())
 	}
 }
@@ -154,18 +155,30 @@ func TestLegacyLocationOnlyConfigStillGroups(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
-	if !contains(w.Body.String(), `"key":"basement"`) {
+	if !strings.Contains(w.Body.String(), `"key":"basement"`) {
 		t.Errorf("a location-only namespace must still group: %s", w.Body.String())
 	}
 }
 
-func contains(haystack, needle string) bool {
-	return len(haystack) >= len(needle) && (func() bool {
-		for i := 0; i+len(needle) <= len(haystack); i++ {
-			if haystack[i:i+len(needle)] == needle {
-				return true
-			}
-		}
-		return false
-	})()
+// The fallback keyed on the parsed list being empty rather than the parameter being
+// absent, so `rooms=` present-but-empty silently re-enabled the deprecated filter —
+// contradicting both the README and the OpenAPI description, which say `locations` is
+// ignored when `rooms` is present. A UI that always emits `rooms=` and empties it when
+// the user clears the filter would get a filtered response where it expects all devices.
+func TestEmptyRoomsParamDoesNotReEnableTheDeprecatedFilter(t *testing.T) {
+	s, q := dataSetup(t)
+	s.Config = fakeConfig{devices: roomDevices()}
+	q.QueryFunc = func(string) ([]influx.Row, error) {
+		return bucketRows(t, s, "climate_basement", "today", "1h", 20), nil
+	}
+
+	all := doGET(t, s, "/series?window=today&interval=1h")
+	got := doGET(t, s, "/series?window=today&interval=1h&rooms=&locations=basement.hallway")
+
+	if got.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", got.Code, got.Body.String())
+	}
+	if got.Body.String() != all.Body.String() {
+		t.Error("an empty rooms= applied the deprecated locations= filter")
+	}
 }

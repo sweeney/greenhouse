@@ -121,21 +121,21 @@ func (s *Server) lookupDevice(w http.ResponseWriter, id string) (config.DeviceCo
 }
 
 // resolveDeviceFilter builds the climate device set a /series request should
-// chart, honouring the optional devices= and locations= CSV query filters.
+// chart, honouring the optional devices= and rooms= CSV query filters (locations=
+// is accepted as a deprecated alias for rooms=).
 //
 // The candidate set is ALWAYS climate devices only (config.ReportsEnvironment):
 // greenhouse charts climate, so a non-climate device that happens to share a
-// location is never a candidate (class is applied before location). The two
+// room is never a candidate (class is applied before room). The two
 // filters compose as AND — a device must satisfy both to survive. With neither
 // filter, every climate device is returned (the prior behaviour).
 //
 // Validation writes a 400 (and returns ok=false) when:
 //   - devices= names an id absent from the inventory, or one that exists but is
 //     not a climate sensor;
-//   - locations= names a location with no climate sensor (which includes a
-//     location holding only non-climate devices) — that location does not exist
-//     as far as the climate API is concerned, so it is an error, not an empty
-//     series.
+//   - rooms= names a room with no climate sensor (which includes a room holding
+//     only non-climate devices) — that room does not exist as far as the climate
+//     API is concerned, so it is an error, not an empty series.
 //
 // A valid pair of filters whose intersection is empty is NOT an error: it yields
 // an empty series list (200), consistent with a window that simply has no data.
@@ -155,9 +155,12 @@ func (s *Server) resolveDeviceFilter(w http.ResponseWriter, r *http.Request) (ma
 
 	// rooms= is the current spelling; locations= is a deprecated alias kept for one
 	// release. Both filter on the same resolved place, so they select identically.
+	// Keyed on the parameter being absent, not on the parsed list being empty: an
+	// empty-but-present `rooms=` must not fall back to the deprecated filter, which
+	// is what both the README and the OpenAPI description promise.
 	roomParam := "rooms"
 	locs := splitCSV(q.Get("rooms"))
-	if len(locs) == 0 {
+	if !q.Has("rooms") {
 		if legacy := splitCSV(q.Get("locations")); len(legacy) > 0 {
 			roomParam = "locations"
 			locs = legacy
@@ -324,7 +327,7 @@ func (s *Server) handleDevices(w http.ResponseWriter, _ *http.Request) {
 }
 
 // handleSeries serves GET /series: a multi-series, columnar climate time-series
-// for one field, grouped by device (default) or location (mean per room).
+// for one field, grouped by device (default) or room (mean per room).
 func (s *Server) handleSeries(w http.ResponseWriter, r *http.Request) {
 	groupBy := r.URL.Query().Get("group_by")
 	if groupBy == "" {

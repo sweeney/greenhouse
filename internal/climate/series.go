@@ -176,7 +176,7 @@ func roundTo(x float64, n int) float64 {
 // Grouping rules:
 //   - device (default): one series per environmental device. key=id,
 //     label=DisplayName, location carried through.
-//   - location: members sharing a Location are combined with the MEAN of their
+//   - room: members sharing a room are combined with the MEAN of their
 //     per-bucket readings (NON-additive — never a sum). A bucket where no member
 //     reported stays NaN.
 func AssembleSeries(

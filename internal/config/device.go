@@ -16,7 +16,7 @@ type Thresholds struct {
 }
 
 // DeviceConfig mirrors statehouse's device entry. Greenhouse reads only
-// Class, Location, and DisplayName (to find climate devices and group series
+// Class, Room (via Place) and DisplayName (to find climate devices and group series
 // by location), but the full struct is kept so the shared `statehouse_devices`
 // namespace parses without loss. The canonical identity fields are
 // Scheme + Primary (and Display); the legacy `ieee_address` /
@@ -135,7 +135,7 @@ const CoverageHouse = "house"
 // ReportsEnvironment reports whether greenhouse charts this device — i.e.
 // whether its class writes to the `device_environment` measurement. It is the
 // single predicate behind the device catalog, the series device set, and the
-// devices=/locations= filters.
+// devices=/rooms= filters.
 func (d DeviceConfig) ReportsEnvironment() bool {
 	_, ok := climateClasses[d.Class]
 	return ok

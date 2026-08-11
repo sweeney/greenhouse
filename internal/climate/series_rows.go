@@ -29,7 +29,7 @@ func ValidShape(s string) bool {
 // already rounded by AssembleSeries; a gap (empty bucket) is NaN and marshals
 // to JSON null (see MarshalJSON).
 type SeriesPoint struct {
-	Key   string    `json:"key"`   // series key (device id or location)
+	Key   string    `json:"key"`   // series key (device id or room id)
 	Time  time.Time `json:"time"`  // bucket start, RFC3339 with the configured tz offset
 	Value float64   `json:"value"` // the field value for this bucket (null when no reading)
 }
