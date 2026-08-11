@@ -153,7 +153,17 @@ func (s *Server) resolveDeviceFilter(w http.ResponseWriter, r *http.Request) (ma
 	q := r.URL.Query()
 	ids := splitCSV(q.Get("devices"))
 
-	locs := splitCSV(q.Get("rooms"))
+	// `locations=` was removed with the rest of the alias. Rejecting it rather than
+	// ignoring it matters: an unrecognised parameter would silently widen the request
+	// to every device, so a client asking for one room would get a chart of the whole
+	// house with nothing to explain it. Its sibling group_by=location already 400s.
+	if q.Has("locations") {
+		writeError(w, http.StatusBadRequest,
+			"'locations' was removed; use 'rooms' with floorplan room ids")
+		return nil, false
+	}
+
+	rooms := splitCSV(q.Get("rooms"))
 
 	// Validate requested ids against the inventory and the climate class.
 	for _, id := range ids {
@@ -168,15 +178,15 @@ func (s *Server) resolveDeviceFilter(w http.ResponseWriter, r *http.Request) (ma
 		}
 	}
 
-	// Validate requested locations against locations that hold a climate sensor.
-	if len(locs) > 0 {
+	// Validate requested rooms against rooms that hold a climate sensor.
+	if len(rooms) > 0 {
 		climateRooms := make(map[string]struct{})
 		for _, d := range candidate {
 			if p := d.Place(); p != "" {
 				climateRooms[p] = struct{}{}
 			}
 		}
-		for _, l := range locs {
+		for _, l := range rooms {
 			if _, ok := climateRooms[l]; !ok {
 				writeError(w, http.StatusBadRequest, "unknown room in 'rooms': "+l)
 				return nil, false
@@ -185,7 +195,7 @@ func (s *Server) resolveDeviceFilter(w http.ResponseWriter, r *http.Request) (ma
 	}
 
 	idSet := toSet(ids)
-	locSet := toSet(locs)
+	roomSet := toSet(rooms)
 
 	out := make(map[string]config.DeviceConfig)
 	for id, d := range candidate {
@@ -194,8 +204,8 @@ func (s *Server) resolveDeviceFilter(w http.ResponseWriter, r *http.Request) (ma
 				continue
 			}
 		}
-		if locSet != nil {
-			if _, ok := locSet[d.Place()]; !ok {
+		if roomSet != nil {
+			if _, ok := roomSet[d.Place()]; !ok {
 				continue
 			}
 		}

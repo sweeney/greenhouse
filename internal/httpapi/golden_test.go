@@ -10,12 +10,16 @@ import (
 	"github.com/sweeney/greenhouse/internal/influx"
 )
 
-var updateGolden = flag.Bool("update-golden", false, "rewrite the golden alias snapshots")
+var updateGolden = flag.Bool("update-golden", false, "rewrite the golden series snapshots")
 
-// These snapshots pinned the deprecated `location` spelling until it was removed in
-// step 11 of the floorplan migration. The alias cases were deleted deliberately, and
-// their golden files with them; what remains pins the room responses.
-func TestGoldenDeprecatedAliasResponses(t *testing.T) {
+// These snapshots pin the room responses: series keys, envelope shape and computed
+// values. They began as a tripwire for the deprecated `location` spelling, and those
+// cases were deleted deliberately when it was removed rather than regenerated past.
+//
+// The failure message matters as much as the assertion. Telling the next engineer to
+// reach for -update-golden is how a real regression gets blessed away, so it says what
+// these actually guard instead.
+func TestGoldenSeriesResponses(t *testing.T) {
 	cases := []struct {
 		name string
 		path string
@@ -57,8 +61,8 @@ func TestGoldenDeprecatedAliasResponses(t *testing.T) {
 				t.Fatalf("%v\nrun: go test ./internal/httpapi -update-golden", err)
 			}
 			if string(formatted) != string(want) {
-				t.Errorf("%s drifted from its golden snapshot.\nIf this is a deliberate "+
-					"alias removal, regenerate with -update-golden.\n got: %s\nwant: %s",
+				t.Errorf("%s drifted from its golden snapshot.\nThese pin computed values, "+
+					"not just shape — regenerate only if the change is intended.\n got: %s\nwant: %s",
 					tc.path, formatted, want)
 			}
 		})

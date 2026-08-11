@@ -8,7 +8,7 @@ info:
     non-additive: values are bucketed and grouped with mean/min/max/last, never
     summed. All endpoints except /healthz and /openapi.json require a Bearer JWT
     (user or service token) issued by the configured identity service.
-  version: "0.1.0"
+  version: "0.2.0"
   contact:
     name: Martin Sweeney
     email: martin@sweeney.io

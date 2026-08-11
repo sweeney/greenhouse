@@ -104,7 +104,7 @@ public; everything else requires a Bearer JWT (user **or** service token, via `c
 | `GET /openapi.json` | public | spec (path-coverage test enforced) |
 | `GET /devices` | yes | climate device catalog: id, display_name, room, class, `environment_fields` (which it reports) |
 | `GET /devices/{id}/series?window=&interval=&field=&fn=&shape=` | yes | single-device, single-field time-series (columnar or rows), with `unit` |
-| `GET /series?window=&interval=&field=&fn=&group_by=&shape=` | yes | multi-series; `group_by`: `device` (default), `room` (mean per room); `location` is a deprecated alias |
+| `GET /series?window=&interval=&field=&fn=&group_by=&shape=` | yes | multi-series; `group_by`: `device` (default), `room` (mean per room) |
 | `GET /devices/{id}/latest` | yes | the device's most recent reading across all its fields (for dashboards) |
 | `GET /fields` | yes | the field registry (name, unit, default fn) so consumers can build pickers |
 

@@ -118,7 +118,7 @@ be stale — if a sensor starts reporting a new field before the namespace catch
 up, greenhouse must not turn that oversight into a data outage. It only ever
 narrows on a positive declaration.
 
-## Rooms, and the deprecated `location`
+## Rooms
 
 `location` used to mean two different things across these services — a geographic site
 and a room — so rooms are now `room`, sites are `site`, and floors are `floor`. Room ids
