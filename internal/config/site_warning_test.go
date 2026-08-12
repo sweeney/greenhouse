@@ -3,7 +3,6 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -28,45 +27,11 @@ func TestScalarSiteFormKeepsParsing(t *testing.T) {
 	if cfg.Site.ID != "home" {
 		t.Errorf("Site.ID = %q, want home", cfg.Site.ID)
 	}
-	if cfg.Site.DevicesNamespace != DefaultDevicesNamespace {
-		t.Errorf("DevicesNamespace = %q, want the pre-migration default", cfg.Site.DevicesNamespace)
-	}
-}
-
-// Block-present-but-key-omitted takes a different path from no-block-at-all, which is
-// what TestDevicesNamespaceDefaultsToTheSharedOne already covers: here UnmarshalYAML
-// runs and `var r raw` zeroes DevicesNamespace, so only the normalisation in Load puts
-// the default back. That normalisation is load-bearing and was unasserted.
-func TestSiteBlockWithoutANamespaceStillDefaults(t *testing.T) {
-	cfg, err := Load(writeConfig(t, "site:\n  id: home\n"))
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if cfg.Site.ID != "home" {
-		t.Errorf("Site.ID = %q, want home", cfg.Site.ID)
-	}
-	if cfg.Site.DevicesNamespace != DefaultDevicesNamespace {
-		t.Errorf("DevicesNamespace = %q, want %q", cfg.Site.DevicesNamespace, DefaultDevicesNamespace)
-	}
-}
-
-// The two keys are independently optional, and that is the one misconfiguration the
-// per-site split newly makes possible. A second instance configured for another
-// property but not told where that property's devices live falls back to the shared
-// namespace and charts this house's sensors as the cottage's: no error, no empty
-// response, just a plausible-looking chart of the wrong building.
-//
-// Nothing else catches it — the fetch succeeds and /healthz is green — so Load records
-// it and main logs it at startup.
-func TestSiteIDWithoutANamespaceIsWarnedAbout(t *testing.T) {
-	cfg, err := Load(writeConfig(t, "site:\n  id: cottage\n"))
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	warnings := strings.Join(cfg.Warnings(), "\n")
-	if !strings.Contains(warnings, "cottage") || !strings.Contains(warnings, DefaultDevicesNamespace) {
-		t.Errorf("a site id with no devices_namespace must warn, naming both the site\n"+
-			"and the namespace it fell back to; got %q", warnings)
+	// The scalar form names no namespace, and there is no default left to supply one,
+	// so this config parses and is then refused at boot. See boot_namespace_test.go.
+	if cfg.Site.DevicesNamespace != "" {
+		t.Errorf("DevicesNamespace = %q, want empty: the scalar form names no namespace",
+			cfg.Site.DevicesNamespace)
 	}
 }
 

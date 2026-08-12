@@ -32,8 +32,8 @@ type NamespaceStatus struct {
 }
 
 // Fetcher fetches the devices namespace greenhouse depends on — named by
-// cfg.Site.DevicesNamespace, defaulting to the shared pre-migration
-// statehouse_devices — and HOLDS it as a live snapshot.
+// cfg.Site.DevicesNamespace, which is required and has no default — and HOLDS it
+// as a live snapshot.
 //
 // Greenhouse is read-side and stateless: the Fetcher is the authoritative
 // in-memory view that the HTTP handlers query via the ConfigProvider interface
@@ -52,9 +52,9 @@ type Fetcher struct {
 	HTTPClient *http.Client
 	Logger     *slog.Logger
 
-	// DevicesNamespace names the namespace holding this site's devices. Empty means
-	// the shared pre-migration document, so a Fetcher built without it behaves
-	// exactly as it did before devices were split per site.
+	// DevicesNamespace names the namespace holding this site's devices. Required:
+	// there is no default document left to fall back to, so an empty value makes
+	// Refresh a no-op with a warning rather than a request for the empty name.
 	DevicesNamespace string
 
 	mu       sync.RWMutex
@@ -105,10 +105,18 @@ func (f *Fetcher) Refresh(ctx context.Context) {
 		// token fetch or record a status — there is nothing to fetch.
 		return
 	}
+	if f.DevicesNamespace == "" {
+		// There is no default to fall back to. Requesting the empty name would ask
+		// for /api/v1/config/ — a different endpoint, failing for a reason that says
+		// nothing about the actual mistake. main.go refuses to boot in this state, so
+		// reaching here means a hand-built Fetcher; say so rather than guessing.
+		f.warn("remote config: no devices namespace configured, not fetching")
+		return
+	}
 	token, err := f.Tokens.Token(ctx)
 	if err != nil {
 		f.warn("remote config: identity token fetch failed, keeping last-known snapshot", "error", err)
-		f.recordStatus(f.devicesNamespace(), err)
+		f.recordStatus(f.DevicesNamespace, err)
 		return
 	}
 	f.refreshDevices(ctx, token)
@@ -116,10 +124,10 @@ func (f *Fetcher) Refresh(ctx context.Context) {
 
 func (f *Fetcher) refreshDevices(ctx context.Context, token string) {
 	var devices map[string]DeviceConfig
-	if err := f.fetch(ctx, token, f.devicesNamespace(), &devices); err != nil {
+	if err := f.fetch(ctx, token, f.DevicesNamespace, &devices); err != nil {
 		f.warn("remote config: devices namespace unavailable, keeping last-known",
-			"namespace", f.devicesNamespace(), "error", err)
-		f.recordStatus(f.devicesNamespace(), err)
+			"namespace", f.DevicesNamespace, "error", err)
+		f.recordStatus(f.DevicesNamespace, err)
 		return
 	}
 	if devices == nil {
@@ -129,7 +137,7 @@ func (f *Fetcher) refreshDevices(ctx context.Context, token string) {
 	f.mu.Lock()
 	f.devices = devices
 	f.mu.Unlock()
-	f.recordStatus(f.devicesNamespace(), nil)
+	f.recordStatus(f.DevicesNamespace, nil)
 }
 
 func (f *Fetcher) recordStatus(ns string, err error) {
@@ -190,13 +198,4 @@ func (f *Fetcher) warn(msg string, args ...any) {
 	if f.Logger != nil {
 		f.Logger.Warn(msg, args...)
 	}
-}
-
-// devicesNamespace is the namespace this fetcher reads devices from, defaulting to
-// the shared pre-migration document when config names none.
-func (f *Fetcher) devicesNamespace() string {
-	if f.DevicesNamespace != "" {
-		return f.DevicesNamespace
-	}
-	return DefaultDevicesNamespace
 }

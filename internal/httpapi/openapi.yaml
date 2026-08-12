@@ -702,12 +702,12 @@ components:
           type: object
           description: >-
             Per-namespace status of the most recent remote-config fetch, keyed by
-            the namespace actually read. That key follows site.devices_namespace —
-            `statehouse_devices` by default, `devices_home` once a site names one —
-            so a monitor keyed on a literal `remote_config.statehouse_devices`
-            stops matching when a site migrates, and a missing key reads as healthy
-            in most check expressions. Alert on the top-level `status` field
-            instead, which degrades regardless of the key. Omitted when no
+            the namespace actually read. That key is whatever site.devices_namespace
+            names (e.g. `devices_home`); it is required and has no default, so the
+            key varies per site and per property. A monitor keyed on a literal
+            namespace stops matching when a site migrates, and a missing key reads
+            as healthy in most check expressions. Alert on the top-level `status`
+            field instead, which degrades regardless of the key. Omitted when no
             remote-config fetcher is wired.
           additionalProperties:
             type: object
