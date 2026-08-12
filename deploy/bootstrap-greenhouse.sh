@@ -4,8 +4,9 @@
 # else: it embeds the config, systemd unit and sudoers rule, and mints the Influx
 # token itself. Run AS ROOT on the host:
 #
-#   sudo bash bootstrap-greenhouse.sh                              # prompts for the client secret
-#   sudo GH_CLIENT_SECRET='<secret>' bash bootstrap-greenhouse.sh  # non-interactive
+#   sudo bash bootstrap-greenhouse.sh                              # prompts for what it needs
+#   sudo GH_CLIENT_SECRET='<secret>' GH_SITE_ID=home \
+#        GH_DEVICES_NAMESPACE=devices_home bash bootstrap-greenhouse.sh   # non-interactive
 #
 # Idempotent. It creates the service user, dirs, config, and systemd unit; mints
 # a read-only Influx token (only if one isn't already in place); reuses the
@@ -36,6 +37,32 @@ if [ -z "$SECRET" ]; then
     echo
 fi
 [ -n "$SECRET" ] || { echo "client_secret is required" >&2; exit 1; }
+
+# The site and its devices namespace, demanded here rather than written as a placeholder.
+#
+# A placeholder would be worse than nothing: `devices_REPLACE_ME` is a *named* namespace,
+# so greenhouse boots happily, the fetch 404s, fail-open keeps an empty snapshot, and the
+# host serves zero devices — the exact failure the boot refusal exists to remove. Leaving
+# it unset instead would refuse to boot, which is safe but defers the discovery to
+# whenever someone next restarts the service, possibly unattended.
+#
+# Asking now fails while a human is watching the install, and produces a config that works.
+SITE_ID="${GH_SITE_ID:-}"
+if [ -z "$SITE_ID" ]; then
+    printf 'site id (e.g. home): '
+    read -r SITE_ID
+fi
+[ -n "$SITE_ID" ] || { echo "site id is required" >&2; exit 1; }
+
+DEVICES_NAMESPACE="${GH_DEVICES_NAMESPACE:-}"
+if [ -z "$DEVICES_NAMESPACE" ]; then
+    printf 'devices namespace for site %s (e.g. devices_%s): ' "$SITE_ID" "$SITE_ID"
+    read -r DEVICES_NAMESPACE
+fi
+# Not defaulted to devices_$SITE_ID: a namespace is a document that either exists or does
+# not, so guessing turns a typo in the site id into a 404 and an empty snapshot rather
+# than a complaint. Two facts, stated separately, checked against each other.
+[ -n "$DEVICES_NAMESPACE" ] || { echo "devices namespace is required" >&2; exit 1; }
 
 echo "=== Service user ==="
 if ! id "$SERVICE" >/dev/null 2>&1; then
@@ -85,18 +112,16 @@ echo "  /etc/$SERVICE/config.yaml exists, leaving it alone"
 echo "  (delete it first if you want this script to write a fresh one)"
 else
 cat > /etc/$SERVICE/config.yaml <<CONFIG
-# The property this instance serves. Replace the id with the site's id from the
-# `sites` namespace, and devices_namespace with that site's devices document
-# (e.g. devices_home).
+# The property this instance serves, and the config namespace holding its devices.
 #
 # Both are required — there is no fallback. The shared pre-migration namespace this
-# once defaulted to was deleted, so leaving devices_namespace unset means greenhouse
-# refuses to start rather than booting and serving zero devices. It is spelled out
-# rather than derived from the id so a typo is a complaint at startup instead of a
-# successful fetch of nothing.
+# once defaulted to was deleted, so an unset devices_namespace means greenhouse
+# refuses to start rather than booting and serving zero devices. Filled in at install
+# time so this file is complete as written; a placeholder would name a namespace that
+# does not exist, which boots and then serves nothing.
 site:
-  id: "REPLACE_ME"
-  devices_namespace: "devices_REPLACE_ME"
+  id: "$SITE_ID"
+  devices_namespace: "$DEVICES_NAMESPACE"
 
 http:
   listen: ":$PORT"
