@@ -23,7 +23,7 @@ func sampleResponse() SeriesResponse {
 		Shape:    ShapeColumns,
 		Buckets:  buckets,
 		Series: []Series{
-			{Key: "climate_basement", Label: "Basement", Location: "basement",
+			{Key: "climate_basement", Label: "Basement", Room: "basement",
 				Values: []float64{18, math.NaN(), 20}, Min: 18, Max: 20, Mean: 19},
 		},
 	}

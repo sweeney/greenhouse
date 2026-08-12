@@ -24,7 +24,6 @@
     {
       "key": "climate_basement",
       "label": "Basement",
-      "location": "basement.hallway",
       "max": 20,
       "mean": 20,
       "min": 20,

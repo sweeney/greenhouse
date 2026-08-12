@@ -10,21 +10,20 @@ import (
 	"github.com/sweeney/greenhouse/internal/influx"
 )
 
-var updateGolden = flag.Bool("update-golden", false, "rewrite the golden alias snapshots")
+var updateGolden = flag.Bool("update-golden", false, "rewrite the golden series snapshots")
 
-// the floorplan migration plan (§11.5 of floorplan/docs/PLAN.md): the deprecated `location` spelling is a promise, and a promise needs
-// enforcing rather than documenting. These snapshots pin exactly what it returns.
+// These snapshots pin the room responses: series keys, envelope shape and computed
+// values. They began as a tripwire for the deprecated `location` spelling, and those
+// cases were deleted deliberately when it was removed rather than regenerated past.
 //
-// Removing the alias must fail these tests until they are deliberately regenerated with
-// -update-golden, so it cannot happen by accident — which matters because the desktop client
-// ships through Xcode and is the slowest lane to migrate.
-func TestGoldenDeprecatedAliasResponses(t *testing.T) {
+// The failure message matters as much as the assertion. Telling the next engineer to
+// reach for -update-golden is how a real regression gets blessed away, so it says what
+// these actually guard instead.
+func TestGoldenSeriesResponses(t *testing.T) {
 	cases := []struct {
 		name string
 		path string
 	}{
-		{"group-by-location", "/series?window=today&interval=1h&group_by=location"},
-		{"locations-filter", "/series?window=today&interval=1h&locations=basement.hallway"},
 		{"group-by-room", "/series?window=today&interval=1h&group_by=room"},
 		{"rooms-filter", "/series?window=today&interval=1h&rooms=basement.hallway"},
 	}
@@ -62,8 +61,8 @@ func TestGoldenDeprecatedAliasResponses(t *testing.T) {
 				t.Fatalf("%v\nrun: go test ./internal/httpapi -update-golden", err)
 			}
 			if string(formatted) != string(want) {
-				t.Errorf("%s drifted from its golden snapshot.\nIf this is a deliberate "+
-					"alias removal, regenerate with -update-golden.\n got: %s\nwant: %s",
+				t.Errorf("%s drifted from its golden snapshot.\nThese pin computed values, "+
+					"not just shape — regenerate only if the change is intended.\n got: %s\nwant: %s",
 					tc.path, formatted, want)
 			}
 		})

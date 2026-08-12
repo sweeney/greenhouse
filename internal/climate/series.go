@@ -17,10 +17,6 @@ const (
 	GroupByDevice = "device"
 	// GroupByRoom groups by floorplan room id.
 	GroupByRoom = "room"
-	// GroupByLocation is the deprecated spelling of GroupByRoom, kept for one
-	// release so consumers migrate independently. Both produce identical numbers;
-	// only the reported group_by differs.
-	GroupByLocation = "location"
 )
 
 // ValueDP is the decimal precision climate values are rounded to at the response
@@ -44,9 +40,6 @@ type Series struct {
 	Label string `json:"label"`
 	// Room is the floorplan room id this series belongs to.
 	Room string `json:"room,omitempty"`
-	// Location is the deprecated spelling of Room, emitted alongside it for one
-	// release so consumers can migrate independently. Both carry the same value.
-	Location string `json:"location,omitempty"`
 
 	Values []float64 `json:"values"`
 
@@ -58,14 +51,13 @@ type Series struct {
 // seriesJSON is the wire form of Series with Values as []*float64 so NaN gaps
 // marshal to null and the summary stats drop to null when the series is empty.
 type seriesJSON struct {
-	Key      string     `json:"key"`
-	Label    string     `json:"label"`
-	Room     string     `json:"room,omitempty"`
-	Location string     `json:"location,omitempty"`
-	Values   []*float64 `json:"values"`
-	Min      *float64   `json:"min"`
-	Max      *float64   `json:"max"`
-	Mean     *float64   `json:"mean"`
+	Key    string     `json:"key"`
+	Label  string     `json:"label"`
+	Room   string     `json:"room,omitempty"`
+	Values []*float64 `json:"values"`
+	Min    *float64   `json:"min"`
+	Max    *float64   `json:"max"`
+	Mean   *float64   `json:"mean"`
 }
 
 // MarshalJSON renders NaN values (empty buckets / empty-series stats) as JSON
@@ -73,14 +65,13 @@ type seriesJSON struct {
 // while emitting valid JSON.
 func (s Series) MarshalJSON() ([]byte, error) {
 	out := seriesJSON{
-		Key:      s.Key,
-		Label:    s.Label,
-		Room:     s.Room,
-		Location: s.Location,
-		Values:   make([]*float64, len(s.Values)),
-		Min:      nullable(s.Min),
-		Max:      nullable(s.Max),
-		Mean:     nullable(s.Mean),
+		Key:    s.Key,
+		Label:  s.Label,
+		Room:   s.Room,
+		Values: make([]*float64, len(s.Values)),
+		Min:    nullable(s.Min),
+		Max:    nullable(s.Max),
+		Mean:   nullable(s.Mean),
 	}
 	for i, v := range s.Values {
 		out.Values[i] = nullable(v)
@@ -200,7 +191,7 @@ func AssembleSeries(
 	}
 
 	switch groupBy {
-	case GroupByRoom, GroupByLocation:
+	case GroupByRoom:
 		return assembleByRoom(buckets, devices, get)
 	default: // device and unknown fall back to per-device
 		return assembleByDevice(buckets, devices, get)
@@ -275,12 +266,10 @@ func assembleByRoom(
 func buildSeries(key, label, place string, buckets []time.Time, members [][]float64) Series {
 	n := len(buckets)
 	s := Series{
-		Key:   key,
-		Label: label,
-		// Both spellings carry the same value during the alias period.
-		Room:     place,
-		Location: place,
-		Values:   make([]float64, n),
+		Key:    key,
+		Label:  label,
+		Room:   place,
+		Values: make([]float64, n),
 	}
 	min, max, sum := math.Inf(1), math.Inf(-1), 0.0
 	count := 0

@@ -153,19 +153,17 @@ func (s *Server) resolveDeviceFilter(w http.ResponseWriter, r *http.Request) (ma
 	q := r.URL.Query()
 	ids := splitCSV(q.Get("devices"))
 
-	// rooms= is the current spelling; locations= is a deprecated alias kept for one
-	// release. Both filter on the same resolved place, so they select identically.
-	// Keyed on the parameter being absent, not on the parsed list being empty: an
-	// empty-but-present `rooms=` must not fall back to the deprecated filter, which
-	// is what both the README and the OpenAPI description promise.
-	roomParam := "rooms"
-	locs := splitCSV(q.Get("rooms"))
-	if !q.Has("rooms") {
-		if legacy := splitCSV(q.Get("locations")); len(legacy) > 0 {
-			roomParam = "locations"
-			locs = legacy
-		}
+	// `locations=` was removed with the rest of the alias. Rejecting it rather than
+	// ignoring it matters: an unrecognised parameter would silently widen the request
+	// to every device, so a client asking for one room would get a chart of the whole
+	// house with nothing to explain it. Its sibling group_by=location already 400s.
+	if q.Has("locations") {
+		writeError(w, http.StatusBadRequest,
+			"'locations' was removed; use 'rooms' with floorplan room ids")
+		return nil, false
 	}
+
+	rooms := splitCSV(q.Get("rooms"))
 
 	// Validate requested ids against the inventory and the climate class.
 	for _, id := range ids {
@@ -180,24 +178,24 @@ func (s *Server) resolveDeviceFilter(w http.ResponseWriter, r *http.Request) (ma
 		}
 	}
 
-	// Validate requested locations against locations that hold a climate sensor.
-	if len(locs) > 0 {
+	// Validate requested rooms against rooms that hold a climate sensor.
+	if len(rooms) > 0 {
 		climateRooms := make(map[string]struct{})
 		for _, d := range candidate {
 			if p := d.Place(); p != "" {
 				climateRooms[p] = struct{}{}
 			}
 		}
-		for _, l := range locs {
+		for _, l := range rooms {
 			if _, ok := climateRooms[l]; !ok {
-				writeError(w, http.StatusBadRequest, "unknown room in '"+roomParam+"': "+l)
+				writeError(w, http.StatusBadRequest, "unknown room in 'rooms': "+l)
 				return nil, false
 			}
 		}
 	}
 
 	idSet := toSet(ids)
-	locSet := toSet(locs)
+	roomSet := toSet(rooms)
 
 	out := make(map[string]config.DeviceConfig)
 	for id, d := range candidate {
@@ -206,8 +204,8 @@ func (s *Server) resolveDeviceFilter(w http.ResponseWriter, r *http.Request) (ma
 				continue
 			}
 		}
-		if locSet != nil {
-			if _, ok := locSet[d.Place()]; !ok {
+		if roomSet != nil {
+			if _, ok := roomSet[d.Place()]; !ok {
 				continue
 			}
 		}
@@ -262,7 +260,7 @@ func toSet(items []string) map[string]struct{} {
 // validGroupBy reports whether g is an accepted group_by mode.
 func validGroupBy(g string) bool {
 	switch g {
-	case climate.GroupByDevice, climate.GroupByRoom, climate.GroupByLocation:
+	case climate.GroupByDevice, climate.GroupByRoom:
 		return true
 	default:
 		return false
@@ -273,11 +271,8 @@ func validGroupBy(g string) bool {
 type catalogEntry struct {
 	ID          string `json:"id"`
 	DisplayName string `json:"display_name"`
-	// Room is the floorplan room id. Location is its deprecated spelling, emitted
-	// alongside it for one release with the same value.
-	Room     string `json:"room"`
-	Location string `json:"location"`
-	Class    string `json:"class"`
+	Room        string `json:"room"`
+	Class       string `json:"class"`
 	// EnvironmentFields mirrors the config key of the same name: the fields
 	// this device actually writes to `device_environment`. Named to match, so
 	// the catalog and the namespace describe the same thing with one word.
@@ -317,7 +312,6 @@ func (s *Server) handleDevices(w http.ResponseWriter, _ *http.Request) {
 			ID:                id,
 			DisplayName:       dev.DisplayName,
 			Room:              dev.Place(),
-			Location:          dev.Place(),
 			Class:             dev.Class,
 			EnvironmentFields: fields,
 		})
@@ -334,7 +328,7 @@ func (s *Server) handleSeries(w http.ResponseWriter, r *http.Request) {
 		groupBy = climate.GroupByDevice
 	}
 	if !validGroupBy(groupBy) {
-		writeError(w, http.StatusBadRequest, "invalid 'group_by' (want one of device, room; location is a deprecated alias for room)")
+		writeError(w, http.StatusBadRequest, "invalid 'group_by' (want one of device, room)")
 		return
 	}
 	shape := r.URL.Query().Get("shape")

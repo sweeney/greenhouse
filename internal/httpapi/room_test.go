@@ -11,12 +11,9 @@ import (
 )
 
 // The floorplan migration renames the read-side vocabulary: `location` meant both a
-// geographic site and a room, so rooms are now `room`. `location` and `locations=` stay
-// as deprecated aliases for one release so consumers migrate independently — the desktop
-// client ships through an app store review and is the slowest lane.
-//
-// The alias promise is enforced here rather than documented: both spellings must return
-// the same numbers, differing only in the reported group_by.
+// geographic site and a room, so rooms are now `room`. The deprecated spelling has been
+// removed, and what remains here pins the room behaviour itself — including that the
+// removed parameter is rejected rather than ignored.
 
 // roomDevices mirrors testDevices but with the published room ids the devices namespace
 // will carry after the migration.
@@ -73,63 +70,6 @@ func TestSeries_GroupByRoomKeysOnRoomIDs(t *testing.T) {
 	}
 }
 
-// TestGroupByRoomAndLocationAreEquivalent is the alias-period contract: the two spellings
-// return the same numbers, and only the reported group_by differs.
-func TestGroupByRoomAndLocationAreEquivalent(t *testing.T) {
-	s, q := dataSetup(t)
-	s.Config = fakeConfig{devices: roomDevices()}
-	q.QueryFunc = func(string) ([]influx.Row, error) {
-		return bucketRows(t, s, "climate_basement", "today", "1h", 20), nil
-	}
-
-	byRoom := doGET(t, s, "/series?window=today&interval=1h&group_by=room")
-	byLocation := doGET(t, s, "/series?window=today&interval=1h&group_by=location")
-
-	if byRoom.Code != http.StatusOK || byLocation.Code != http.StatusOK {
-		t.Fatalf("codes: room=%d location=%d", byRoom.Code, byLocation.Code)
-	}
-
-	var a, b map[string]any
-	if err := json.Unmarshal(byRoom.Body.Bytes(), &a); err != nil {
-		t.Fatal(err)
-	}
-	if err := json.Unmarshal(byLocation.Body.Bytes(), &b); err != nil {
-		t.Fatal(err)
-	}
-	if a["group_by"] != "room" || b["group_by"] != "location" {
-		t.Errorf("group_by: room response %v, location response %v", a["group_by"], b["group_by"])
-	}
-	delete(a, "group_by")
-	delete(b, "group_by")
-
-	ja, _ := json.Marshal(a)
-	jb, _ := json.Marshal(b)
-	if string(ja) != string(jb) {
-		t.Errorf("the alias returns different data\n room: %s\n  loc: %s", ja, jb)
-	}
-}
-
-func TestRoomsFilterSelectsTheSameDevicesAsLocations(t *testing.T) {
-	s, q := dataSetup(t)
-	s.Config = fakeConfig{devices: roomDevices()}
-	q.QueryFunc = func(string) ([]influx.Row, error) {
-		return bucketRows(t, s, "climate_basement", "today", "1h", 20), nil
-	}
-
-	byRooms := doGET(t, s, "/series?window=today&interval=1h&rooms=basement.hallway")
-	byLocations := doGET(t, s, "/series?window=today&interval=1h&locations=basement.hallway")
-
-	if byRooms.Code != http.StatusOK {
-		t.Fatalf("rooms= want 200, got %d: %s", byRooms.Code, byRooms.Body.String())
-	}
-	if byLocations.Code != http.StatusOK {
-		t.Fatalf("locations= want 200, got %d: %s", byLocations.Code, byLocations.Body.String())
-	}
-	if byRooms.Body.String() != byLocations.Body.String() {
-		t.Error("rooms= and locations= selected different devices")
-	}
-}
-
 func TestUnknownRoomIsA400(t *testing.T) {
 	s, _ := dataSetup(t)
 	s.Config = fakeConfig{devices: roomDevices()}
@@ -160,12 +100,10 @@ func TestLegacyLocationOnlyConfigStillGroups(t *testing.T) {
 	}
 }
 
-// The fallback keyed on the parsed list being empty rather than the parameter being
-// absent, so `rooms=` present-but-empty silently re-enabled the deprecated filter —
-// contradicting both the README and the OpenAPI description, which say `locations` is
-// ignored when `rooms` is present. A UI that always emits `rooms=` and empties it when
-// the user clears the filter would get a filtered response where it expects all devices.
-func TestEmptyRoomsParamDoesNotReEnableTheDeprecatedFilter(t *testing.T) {
+// An empty `rooms=` means no room filter, not a filter that matches nothing. A UI that
+// always emits the parameter and empties it when the user clears the filter must get
+// every device back.
+func TestEmptyRoomsParamMeansNoFilter(t *testing.T) {
 	s, q := dataSetup(t)
 	s.Config = fakeConfig{devices: roomDevices()}
 	q.QueryFunc = func(string) ([]influx.Row, error) {
@@ -173,12 +111,35 @@ func TestEmptyRoomsParamDoesNotReEnableTheDeprecatedFilter(t *testing.T) {
 	}
 
 	all := doGET(t, s, "/series?window=today&interval=1h")
-	got := doGET(t, s, "/series?window=today&interval=1h&rooms=&locations=basement.hallway")
+	got := doGET(t, s, "/series?window=today&interval=1h&rooms=")
 
 	if got.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", got.Code, got.Body.String())
 	}
 	if got.Body.String() != all.Body.String() {
-		t.Error("an empty rooms= applied the deprecated locations= filter")
+		t.Error("an empty rooms= filtered the response instead of meaning no filter")
+	}
+}
+
+// `locations=` was removed, and an unrecognised query parameter is silently ignored —
+// so an un-migrated client asking for one room would get every device instead, a chart
+// labelled with one room showing the whole house, with nothing to explain it.
+//
+// Its sibling spelling already fails loudly: group_by=location 400s. Two opposite
+// failure modes for the same removal in the same release, and the silent one produces
+// plausible wrong data rather than an error a client can act on.
+func TestRemovedLocationsParamIsRejectedNotIgnored(t *testing.T) {
+	s, q := dataSetup(t)
+	s.Config = fakeConfig{devices: roomDevices()}
+	q.QueryFunc = func(string) ([]influx.Row, error) {
+		return bucketRows(t, s, "climate_basement", "today", "1h", 20), nil
+	}
+
+	w := doGET(t, s, "/series?window=today&interval=1h&locations=basement.utility")
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "rooms") {
+		t.Errorf("the error must name the replacement: %s", w.Body.String())
 	}
 }
