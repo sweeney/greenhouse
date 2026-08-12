@@ -141,15 +141,20 @@ site:
   devices_namespace: devices_home
 ```
 
-It defaults to `statehouse_devices` — the shared namespace every service read before
-devices were split per site — so an unedited config keeps reading what it always read.
+`devices_namespace` is **required — there is no default.** It once fell back to the
+shared `statehouse_devices` document, but that was deleted from the config service on
+2026-08-12, so a fallback would name a 404: fetched fail-open into an empty snapshot,
+with `/healthz` still reporting `ok` and every endpoint honestly serving zero devices.
+Greenhouse refuses to start when it is unset instead, because boot is the only place
+that can still tell "unnamed" apart from "named and empty".
 
 
 Local YAML (`/etc/greenhouse/config.yaml`, see `config/config.example.yaml`):
 `http.listen`, `influx{url,org,bucket,token_file}`,
 `identity{base_url,client_id,client_secret}`, `remote_config.base_url`,
-`house.timezone`, `auth.allow_insecure`. Device inventory is fetched from the remote config service
-(`statehouse_devices` namespace only — **no** tariffs). Fetches are fail-open
+`site{id,devices_namespace}`, `house.timezone`, `auth.allow_insecure`. Device inventory
+is fetched from the remote config service (one devices namespace only — **no** tariffs,
+and `site.devices_namespace` must name it). Fetches are fail-open
 (log + keep last-known) with SIGHUP reload. Greenhouse needs its own Influx
 **read token** (statehouse bucket) and `client_id`/`secret` in id.swee.net.
 

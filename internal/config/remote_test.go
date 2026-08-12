@@ -28,11 +28,19 @@ func newTestFetcher(t *testing.T, mux *http.ServeMux, tokens TokenSource) *Fetch
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return &Fetcher{
-		BaseURL:    srv.URL,
-		Tokens:     tokens,
-		HTTPClient: srv.Client(),
+		BaseURL: srv.URL,
+		// Named explicitly: there is no default, so a Fetcher without this refuses
+		// to fetch at all. Tests that want that behaviour clear it themselves.
+		DevicesNamespace: testNamespace,
+		Tokens:           tokens,
+		HTTPClient:       srv.Client(),
 	}
 }
+
+// testNamespace stands in for a real per-site namespace. It is deliberately not
+// `statehouse_devices`: that document was deleted from the config service, and a test
+// naming it would suggest it is still something greenhouse can fall back to.
+const testNamespace = "devices_home"
 
 // serveNamespace serves a JSON namespace requiring Bearer test-token.
 func serveNamespace(mux *http.ServeMux, ns string, v any) {
@@ -48,7 +56,7 @@ func serveNamespace(mux *http.ServeMux, ns string, v any) {
 
 func TestFetcher_RefreshPopulatesSnapshot(t *testing.T) {
 	mux := http.NewServeMux()
-	serveNamespace(mux, "statehouse_devices", map[string]any{
+	serveNamespace(mux, testNamespace, map[string]any{
 		"glowsensorth1": map[string]any{
 			// Legacy Z2M shorthand: normaliseDevices folds these into
 			// scheme=zigbee, primary=ieee_address, display=friendly_name.
@@ -79,17 +87,17 @@ func TestFetcher_RefreshPopulatesSnapshot(t *testing.T) {
 	}
 
 	st := f.Statuses()
-	if !st["statehouse_devices"].OK {
-		t.Error("statehouse_devices status not OK")
+	if !st[testNamespace].OK {
+		t.Error("status not OK for the configured namespace")
 	}
-	if st["statehouse_devices"].FetchedAt.IsZero() {
-		t.Error("statehouse_devices fetched_at is zero")
+	if st[testNamespace].FetchedAt.IsZero() {
+		t.Error("fetched_at is zero for the configured namespace")
 	}
 }
 
 func TestFetcher_DevicesReturnsCopy(t *testing.T) {
 	mux := http.NewServeMux()
-	serveNamespace(mux, "statehouse_devices", map[string]any{
+	serveNamespace(mux, testNamespace, map[string]any{
 		"climate_basement": map[string]any{"class": "environmental_sensor"},
 	})
 
@@ -112,14 +120,15 @@ func TestFetcher_DevicesReturnsCopy(t *testing.T) {
 func TestFetcher_401InvalidatesAndKeepsSnapshot(t *testing.T) {
 	// Phase 1: a healthy server populates the snapshot.
 	good := http.NewServeMux()
-	serveNamespace(good, "statehouse_devices", map[string]any{
+	serveNamespace(good, testNamespace, map[string]any{
 		"climate_groundfloor": map[string]any{"class": "environmental_sensor", "display_name": "Ground Floor"},
 	})
 	goodSrv := httptest.NewServer(good)
 	defer goodSrv.Close()
 
 	src := &trackingTokenSource{token: "stale-token"}
-	f := &Fetcher{BaseURL: goodSrv.URL, Tokens: &staticTokenSource{token: "test-token"}, HTTPClient: goodSrv.Client()}
+	f := &Fetcher{BaseURL: goodSrv.URL, DevicesNamespace: testNamespace,
+		Tokens: &staticTokenSource{token: "test-token"}, HTTPClient: goodSrv.Client()}
 	f.Refresh(context.Background())
 	if _, ok := f.Devices()["climate_groundfloor"]; !ok {
 		t.Fatal("precondition: climate_groundfloor should be present after first refresh")
@@ -127,7 +136,7 @@ func TestFetcher_401InvalidatesAndKeepsSnapshot(t *testing.T) {
 
 	// Phase 2: point the fetcher at a server that always 401s.
 	bad := http.NewServeMux()
-	bad.HandleFunc("/api/v1/config/statehouse_devices", func(w http.ResponseWriter, r *http.Request) {
+	bad.HandleFunc("/api/v1/config/"+testNamespace, func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	})
 	badSrv := httptest.NewServer(bad)
@@ -145,14 +154,14 @@ func TestFetcher_401InvalidatesAndKeepsSnapshot(t *testing.T) {
 	if _, ok := f.Devices()["climate_groundfloor"]; !ok {
 		t.Error("device snapshot was wiped after a 401 (should fail-open)")
 	}
-	if f.Statuses()["statehouse_devices"].OK {
+	if f.Statuses()[testNamespace].OK {
 		t.Error("status should record the 401 failure")
 	}
 }
 
 func TestFetcher_TokenFailureKeepsSnapshot(t *testing.T) {
 	mux := http.NewServeMux()
-	serveNamespace(mux, "statehouse_devices", map[string]any{
+	serveNamespace(mux, testNamespace, map[string]any{
 		"climate_firstfloor": map[string]any{"class": "environmental_sensor"},
 	})
 	f := newTestFetcher(t, mux, &staticTokenSource{token: "test-token"})
@@ -168,7 +177,7 @@ func TestFetcher_TokenFailureKeepsSnapshot(t *testing.T) {
 	if _, ok := f.Devices()["climate_firstfloor"]; !ok {
 		t.Error("snapshot wiped after token failure (should fail-open)")
 	}
-	if f.Statuses()["statehouse_devices"].OK {
+	if f.Statuses()[testNamespace].OK {
 		t.Error("status should record token failure")
 	}
 }

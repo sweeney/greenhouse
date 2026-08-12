@@ -28,32 +28,7 @@ func TestSiteBlockNamesTheDevicesNamespace(t *testing.T) {
 	}
 }
 
-// A config with no site block keeps reading the shared namespace it always read, so
-// deploying the binary before editing the host's config changes nothing.
-func TestDevicesNamespaceDefaultsToTheSharedOne(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(p, []byte("http:\n  listen: :8080\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err := Load(p)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if cfg.Site.DevicesNamespace != DefaultDevicesNamespace {
-		t.Errorf("DevicesNamespace = %q, want %q", cfg.Site.DevicesNamespace, DefaultDevicesNamespace)
-	}
-}
-
-// Naming the namespace in config is only useful if the fetcher reads it. Publishing a
-// per-site namespace did nothing while this was a package-level constant.
-func TestFetcherReadsTheConfiguredNamespace(t *testing.T) {
-	f := &Fetcher{}
-	if got := f.devicesNamespace(); got != DefaultDevicesNamespace {
-		t.Errorf("unset: %q, want the shared default %q", got, DefaultDevicesNamespace)
-	}
-	f.DevicesNamespace = "devices_home"
-	if got := f.devicesNamespace(); got != "devices_home" {
-		t.Errorf("configured: %q, want devices_home", got)
-	}
-}
+// The no-default replacements for the two cases this file used to cover live in
+// namespace_required_test.go: Load must leave an unnamed namespace unset, and the
+// Fetcher must refuse one rather than requesting the empty name. That the Fetcher
+// reads the name it is given is covered end-to-end by remote_test.go.

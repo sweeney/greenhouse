@@ -117,7 +117,9 @@ Series response carries `field` + `unit` + `fn`. **No** `/bill`, `/tariffs`, `/c
 Local YAML (`/etc/greenhouse/config.yaml`) — same shape as countinghouse minus tariffs:
 `http.listen: ":8082"` (statehouse :8080, countinghouse :8081), `influx{url,org,bucket,token_file}`,
 `identity{base_url,client_id,client_secret}`, `remote_config.base_url`, `house.timezone`.
-Remote config: fetch **`statehouse_devices` only** (no `energy_tariffs`); fail-open, SIGHUP reload.
+Remote config: fetch **one devices namespace only** — `site.devices_namespace`, required with no
+default since the shared `statehouse_devices` document was deleted (no `energy_tariffs`);
+fail-open, SIGHUP reload.
 Greenhouse needs its own Influx **read token** (statehouse bucket) and `client_id/secret` in id.swee.net.
 
 ## 8. Testing (mirror countinghouse density)

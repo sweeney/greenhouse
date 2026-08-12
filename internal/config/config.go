@@ -11,8 +11,8 @@ import (
 // Config is the top-level service configuration loaded from local YAML.
 // Greenhouse is read-side only: there is no MQTT, ingest, or adapter
 // configuration here. Device inventory comes from the remote config service
-// (statehouse_devices). There are no tariffs — greenhouse is climate, not
-// energy.
+// (the namespace site.devices_namespace names). There are no tariffs —
+// greenhouse is climate, not energy.
 type Config struct {
 	Site         SiteConfig         `yaml:"site"`
 	HTTP         HTTPConfig         `yaml:"http"`
@@ -47,14 +47,13 @@ type SiteConfig struct {
 	ID string `yaml:"id"`
 
 	// DevicesNamespace is the config namespace holding this site's devices.
-	// Defaults to the shared pre-migration namespace, so a config that predates the
-	// per-site split keeps reading exactly what it always read.
+	// Required: there is no default. The shared `statehouse_devices` document that
+	// once backed one was deleted from the config service on 2026-08-12, so a
+	// fallback would now name a 404 — fetched fail-open into an empty snapshot, with
+	// /healthz still reporting ok and every endpoint honestly serving zero devices.
+	// An unset namespace is refused at boot instead; see validateBootConfig.
 	DevicesNamespace string `yaml:"devices_namespace"`
 }
-
-// DefaultDevicesNamespace is the single shared namespace every service read before
-// devices were split per site.
-const DefaultDevicesNamespace = "statehouse_devices"
 
 // UnmarshalYAML accepts either the block form or a bare id:
 //
@@ -178,29 +177,25 @@ func Load(path string) (Config, error) {
 		}
 	}
 	cfg.warnings = siteWarnings(cfg.Site)
-	if cfg.Site.DevicesNamespace == "" {
-		cfg.Site.DevicesNamespace = DefaultDevicesNamespace
-	}
 	return cfg, nil
 }
 
-// siteWarnings reports a half-filled site block. Must run before the default is
-// applied: afterwards "defaulted" and "explicitly set to the shared namespace" are the
-// same value, and that distinction is the whole point.
+// siteWarnings reports a half-filled site block that is still legal to run.
+//
+// Only one half qualifies now. A namespace with no site id works — the instance reads
+// the right devices and merely cannot say which property they belong to — so it stays
+// a warning. The mirror case, an id with no namespace, used to warn and fall back to
+// the shared document; that document is gone, so it is a boot refusal instead
+// (validateBootConfig) and warning about it too would only tell the operator to fix
+// something that already stopped the process.
 //
 // The namespace is deliberately not derived from the id. A namespace is a document
 // that either exists or does not, so guessing `devices_<id>` would convert a typo in
 // `id` into a successful fetch of nothing — fail-open, an empty snapshot, and every
-// endpoint reporting no devices — rather than into this complaint. Two facts, stated
+// endpoint reporting no devices — rather than into a complaint. Two facts, stated
 // twice, checked against each other.
 func siteWarnings(s SiteConfig) []string {
-	switch {
-	case s.ID != "" && s.DevicesNamespace == "":
-		return []string{fmt.Sprintf(
-			"site %q names no devices_namespace, so it reads the shared %s; "+
-				"if this instance serves its own property, name its namespace explicitly",
-			s.ID, DefaultDevicesNamespace)}
-	case s.ID == "" && s.DevicesNamespace != "":
+	if s.ID == "" && s.DevicesNamespace != "" {
 		return []string{fmt.Sprintf(
 			"devices_namespace %q is set but the site has no id, so this instance "+
 				"cannot report which property it serves", s.DevicesNamespace)}

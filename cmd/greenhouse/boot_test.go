@@ -11,9 +11,12 @@ import (
 // explicitly set, so a single missing/typo'd config key can never silently bring
 // the whole data API up unauthenticated.
 func TestValidateBootConfig(t *testing.T) {
+	// The namespace is set on every fixture so these cases keep testing the auth
+	// boundary alone; the namespace refusal is covered in boot_namespace_test.go.
 	withAuth := func() config.Config {
 		c := config.Default()
 		c.Identity.BaseURL = "https://id.swee.net"
+		c.Site = config.SiteConfig{ID: "home", DevicesNamespace: "devices_home"}
 		return c
 	}
 

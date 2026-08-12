@@ -23,11 +23,11 @@ import (
 )
 
 // ConfigProvider supplies the current remote-config snapshot the data handlers
-// need. The real implementation is the Fetcher (which refreshes
-// statehouse_devices on SIGHUP); tests inject a fake. The method returns the
+// need. The real implementation is the Fetcher (which refreshes the site's
+// devices namespace on SIGHUP); tests inject a fake. The method returns the
 // latest snapshot and must be safe for concurrent use.
 type ConfigProvider interface {
-	// Devices returns the current statehouse_devices snapshot keyed by
+	// Devices returns the current devices-namespace snapshot keyed by
 	// device_id. Used to find climate devices and group series by location.
 	Devices() map[string]config.DeviceConfig
 }
