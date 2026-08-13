@@ -109,7 +109,7 @@ public; everything else requires a Bearer JWT (user **or** service token, via `c
 | `GET /fields` | yes | the field registry (name, unit, default fn) so consumers can build pickers |
 
 **Windows/intervals/shapes:** identical to countinghouse — `today|week|month|custom`,
-`5m..1d` with smart default + ~2300-bucket cap (admits 5m over a 7-day window), `shape=columns|rows`. Reuse those modules.
+`5m..1d` with smart default + ~2500-bucket cap (admits 5m over a 7-day window), `shape=columns|rows`. Reuse those modules.
 Series response carries `field` + `unit` + `fn`. **No** `/bill`, `/tariffs`, `/cost`, `/events`.
 
 ## 7. Config
