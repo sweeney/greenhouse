@@ -9,8 +9,18 @@ import (
 // MaxBuckets caps how many buckets a single series response may carry. A finer
 // interval over a long window can blow the response size up unboundedly; rather
 // than silently degrade, ResolveInterval errors and asks the caller for a
-// coarser interval. 1000 keeps a chart payload well-bounded.
-const MaxBuckets = 1000
+// coarser interval.
+//
+// The value is sized to the finest resolution we intend to support over a
+// week-scale window: 5-minute buckets over 7 days is 7*24*12 = 2016 buckets,
+// and a rolling week straddling the autumn DST change (a 25h day) can reach
+// ~2028. 2304 = 8 days * 288 five-minute buckets/day clears that with a clean
+// day of headroom while still rejecting genuinely excessive resolution*span
+// (e.g. a month at 5m is ~8640 buckets, rejected with a coarser suggestion).
+// The bound is universal: because any finer interval over a longer window is
+// rejected down to this cap, it is also the worst-case bucket count — and at
+// ~10 climate series a 2016-bucket columnar payload is only a few hundred KB.
+const MaxBuckets = 2304
 
 // Interval is one allowed bucketing granularity.
 //

@@ -277,8 +277,8 @@ components:
       description: >
         Bucket granularity. Defaults smartly to the window (today→1h,
         week/month→1d, custom and rolling <N>d/<N>h→by span). An interval whose
-        bucket count over the window exceeds the ~1000 cap returns 400 asking for
-        a coarser interval.
+        bucket count over the window exceeds the ~2300 cap returns 400 asking for
+        a coarser interval (the cap admits 5m over a 7-day window, ~2016 buckets).
       schema:
         type: string
         enum: [5m, 15m, 30m, 1h, 6h, 1d]
