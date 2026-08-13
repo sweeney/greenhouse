@@ -48,7 +48,8 @@ requires a Bearer JWT (user **or** service token).
   `<N>h` is an **exact** trailing N hours (e.g. `24h`), not midnight-aligned. Use these for
   "last 7 days" / "last 30 days" (`7d`/`30d`), as distinct from `week`/`month`, which reset
   on Monday / the 1st.
-- `interval` — `5m,15m,30m,1h,6h,1d`; smart default per window, ~1000-bucket cap.
+- `interval` — `5m,15m,30m,1h,6h,1d`; smart default per window, ~2500-bucket cap
+  (admits 5-minute resolution over a 7-day window, ~2016 buckets).
 - `field` — one of `temperature_c, humidity_pct, pressure_hpa, wind_speed_ms,
   wind_dir_deg, rainfall_mm, illuminance_lux, uv_index`. Default `temperature_c`.
   Unknown field → 400.

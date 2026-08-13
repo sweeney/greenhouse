@@ -95,7 +95,7 @@ func TestResolveIntervalCalendarFlag(t *testing.T) {
 func TestResolveIntervalMaxBucketsCap(t *testing.T) {
 	loc := mustLondon(t)
 	now := time.Date(2026, 6, 11, 0, 0, 0, 0, loc)
-	// 60-day custom window at 5m → 17280 buckets, well over the 1000 cap.
+	// 60-day custom window at 5m → 17280 buckets, well over the cap.
 	from := now
 	to := now.Add(60 * 24 * time.Hour)
 	win, err := ResolveWindow(now, loc, WindowCustom, from, to)
@@ -122,10 +122,67 @@ func TestResolveIntervalMaxBucketsCap(t *testing.T) {
 func TestResolveIntervalJustUnderCap(t *testing.T) {
 	loc := mustLondon(t)
 	now := time.Date(2026, 6, 11, 0, 0, 0, 0, loc)
-	// 3 days at 5m = 864 buckets (< 1000): allowed.
+	// 3 days at 5m = 864 buckets (< cap): allowed.
 	win, _ := ResolveWindow(now, loc, WindowCustom, now, now.Add(3*24*time.Hour))
 	if _, err := ResolveInterval(win, "5m", loc); err != nil {
 		t.Errorf("864 buckets should be under cap: %v", err)
+	}
+}
+
+// TestResolveInterval_SevenDayFiveMinute is the reason MaxBuckets was raised
+// from 1000: a 7-day window at 5-minute resolution must resolve rather than
+// 400. It covers all three ways a caller expresses "a week": an exact 168h
+// custom range (2016 buckets), the period-to-date `week` window near its
+// widest, and the `7d` rolling window straddling the autumn DST change (a 25h
+// day pushes the count above a naive 7*24*12). The month-at-5m case still
+// exceeds the cap, proving the guard is preserved, not removed.
+func TestResolveInterval_SevenDayFiveMinute(t *testing.T) {
+	loc := mustLondon(t)
+	iv := mustInterval(t, "5m")
+
+	// Exact 168h custom window: 7*24*12 = 2016 buckets.
+	custom, err := ResolveWindow(utc(2026, 6, 1, 0, 0), loc, WindowCustom,
+		utc(2026, 6, 1, 0, 0), utc(2026, 6, 8, 0, 0))
+	if err != nil {
+		t.Fatalf("ResolveWindow custom: %v", err)
+	}
+	if n := countBuckets(custom, iv, loc); n != 2016 {
+		t.Errorf("168h at 5m = %d buckets, want 2016", n)
+	}
+	if _, err := ResolveInterval(custom, "5m", loc); err != nil {
+		t.Errorf("7-day custom window at 5m must resolve: %v", err)
+	}
+
+	// Period-to-date `week` near its widest: now late on a Sunday.
+	weekNow := time.Date(2026, 6, 14, 23, 55, 0, 0, loc) // Sunday
+	week, err := ResolveWindow(weekNow, loc, WindowWeek, time.Time{}, time.Time{})
+	if err != nil {
+		t.Fatalf("ResolveWindow week: %v", err)
+	}
+	if _, err := ResolveInterval(week, "5m", loc); err != nil {
+		t.Errorf("week window at 5m must resolve: %v", err)
+	}
+
+	// `7d` rolling across the autumn DST change (clocks go back 2026-10-25), so
+	// the real span exceeds 168h and the bucket count climbs above 2016. It must
+	// still be within the raised cap.
+	dstNow := time.Date(2026, 10, 27, 23, 55, 0, 0, loc)
+	dst, ok, err := resolveRolling(dstNow, loc, "7d")
+	if err != nil || !ok {
+		t.Fatalf("resolveRolling 7d: ok=%v err=%v", ok, err)
+	}
+	if n := countBuckets(dst, iv, loc); n <= 2016 || n > MaxBuckets {
+		t.Errorf("7d across autumn DST at 5m = %d buckets, want in (2016, %d]", n, MaxBuckets)
+	}
+	if _, err := ResolveInterval(dst, "5m", loc); err != nil {
+		t.Errorf("7d rolling window at 5m must resolve: %v", err)
+	}
+
+	// Guard preserved: a month at 5m (~8640 buckets) still exceeds the cap.
+	month, _ := ResolveWindow(utc(2026, 6, 1, 0, 0), loc, WindowCustom,
+		utc(2026, 6, 1, 0, 0), utc(2026, 7, 1, 0, 0))
+	if _, err := ResolveInterval(month, "5m", loc); err == nil {
+		t.Error("a month at 5m must still exceed the cap")
 	}
 }
 
