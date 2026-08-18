@@ -132,6 +132,15 @@ type SeriesResponse struct {
 // no in-window data — the query range still starts at win.Start — and the
 // alternative is the shifted axis above. Countinghouse made the same trade.
 //
+// Load-bearing assumption: BucketStarts snaps ONCE here and then steps by
+// iv.Duration for the rest of the axis, while Flux re-anchors its grid at every
+// local midnight. Those two agree only because every fixed interval divides a
+// 24h day evenly (5m/15m/30m/1h/6h all do). An interval that did not — 7m, 50m,
+// 5h — would be on-grid for bucket 0 and off it after the first midnight in the
+// window, silently reintroducing issue #18 for the tail of the series, with
+// countBuckets agreeing with the axis while both disagree with Influx.
+// TestFixedIntervalsDivideTheDay guards the intervals table against that.
+//
 // Known caveat, pre-existing and unchanged by the snap: a sub-day interval over
 // a window that CROSSES a DST transition still steps by fixed duration from this
 // anchor, so after the changeover it drifts an hour off Flux's stretched local

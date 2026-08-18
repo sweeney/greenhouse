@@ -290,3 +290,32 @@ func assertAxis(t *testing.T, got, want []time.Time) {
 		}
 	}
 }
+
+// TestFixedIntervalsDivideTheDay pins the assumption fixedAxisStart rests on.
+// BucketStarts snaps to the grid once and then steps by iv.Duration for the rest
+// of the axis, while Flux re-anchors its location-aware grid at every local
+// midnight. The two stay in agreement only while every fixed interval divides a
+// 24h day evenly.
+//
+// An interval that did not would be on-grid for bucket 0 and off it after the
+// first midnight in the window — a partial, tail-only recurrence of issue #18,
+// and a quiet one: countBuckets would still agree with BucketStarts while both
+// disagreed with Influx, so the axis-agreement contract in dos_test.go would not
+// catch it either.
+//
+// Note the trap in picking a counter-example: 45m and 90m both DO divide 1440
+// minutes (32 and 16 buckets), so neither would trip this. Genuinely unsafe
+// additions look like 7m, 50m or 5h.
+func TestFixedIntervalsDivideTheDay(t *testing.T) {
+	for _, iv := range intervals {
+		if iv.Calendar {
+			continue // calendar days are stepped by date, not by duration
+		}
+		if 24*time.Hour%iv.Duration != 0 {
+			t.Errorf("interval %q (%s) does not divide a 24h day evenly; the "+
+				"local-midnight grid anchor in fixedAxisStart assumes it does, so "+
+				"the axis would drift off Influx's grid after the first midnight",
+				iv.Token, iv.Duration)
+		}
+	}
+}

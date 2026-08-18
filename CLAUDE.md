@@ -19,9 +19,16 @@ shapes, the Influx Querier + fake, the Server/auth/CORS/spec skeleton, the confi
 - **Climate is NON-additive.** You never *sum* temperatures. Bucket and group with **mean / min /
   max / last** — this is the defining difference from countinghouse's additive kWh. `group_by=room`
   means the **mean** across a room's sensors, not a total.
-- **Bucket alignment.** Influx `aggregateWindow` stamps the right edge by default, which shifts every
-  value one bucket late. Builders MUST set `timeSrc: "_start"` (left-edge), matching the Go-owned
-  canonical bucket axis. This bit it in countinghouse — don't reintroduce it. See PLAN §3.
+- **Bucket alignment.** Two halves, and BOTH have now bitten us. (a) Influx `aggregateWindow` stamps
+  the right edge by default, which shifts every value one bucket late. Builders MUST set
+  `timeSrc: "_start"` (left-edge), matching the Go-owned canonical bucket axis. (b) The Go axis must
+  itself be SNAPPED to the same grid Influx aggregates on — the interval grid anchored at **local
+  midnight**, per `aggregateWindow(location:)` — not stepped off a raw window start. An off-grid axis
+  (every `<N>h` window, any off-grid custom `from`) exact-matches nothing, so every row snaps back
+  into the preceding bucket and the whole series reads one bucket early. `fixedAxisStart` in
+  `internal/climate/series.go` owns this; `countBuckets` MUST derive its count from the same helper or
+  the `MaxBuckets` guard drifts from the real axis. Both halves bit countinghouse first — (a) at
+  build time, (b) as issue #18 here. Don't reintroduce either. See PLAN §3 and §10.
 - **No energy concepts.** No cost, tariff, bill, counter/integral, or on/off events. Those belong to
   countinghouse. Climate fields are plain gauge readings.
 - **Device selection is a class allowlist**, in ONE place: `climateClasses` +

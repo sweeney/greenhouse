@@ -150,8 +150,17 @@ Greenhouse deliberately **copies** countinghouse's domain-agnostic scaffolding (
 interval/bucket axis, columnar/rows shapes, the Influx Querier+fake, the Server/auth/CORS/spec
 skeleton, config Fetcher). Once greenhouse is real, **extract that common core into a shared
 `github.com/sweeney/timeseries` module** consumed by both services — factored from two real
-implementations, not one. The subtle, correctness-critical bits (window/DST, bucket alignment
-`timeSrc:"_start"`) are the priority to de-duplicate, since copy-drift there is dangerous.
+implementations, not one. The subtle, correctness-critical bits are the priority to de-duplicate,
+since copy-drift there is dangerous:
+
+- **window/DST** — calendar stepping over 23h/25h London days.
+- **bucket alignment, both halves** — `timeSrc:"_start"` on the Flux side, AND snapping the Go axis
+  onto the local-midnight interval grid on the Go side (`fixedAxisStart`). Each half has now been
+  found and fixed TWICE, once per service — greenhouse's was issue #18 — which is the strongest
+  argument in this section for extracting rather than copying a third time. Carry across with them:
+  the `countBuckets`/`BucketStarts` agreement contract (the cheap `MaxBuckets` guard must count the
+  snapped axis), the assumption that every fixed interval divides a 24h day, and the known caveat
+  that a sub-day interval over a DST-crossing window still drifts an hour off Flux's stretched grid.
 `auth.TokenSource` already moved to `identity/common` v0.3.0 as the first step.
 
 ---

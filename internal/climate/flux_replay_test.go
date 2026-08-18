@@ -61,6 +61,13 @@ func meanOver(samples []sample, lo, hi time.Time) float64 {
 
 // replayAggregateWindow returns the rows Influx would produce for a mean
 // aggregateWindow over [start, stop) at iv, on the local-midnight-anchored grid.
+//
+// NOTE: the grid is stepped by fixed iv.Duration from one local midnight,
+// mirroring the production axis. That matches Flux only for windows that do NOT
+// cross a DST transition, which is every case exercised below. A DST-crossing
+// case would drift in lockstep with BucketStarts and pass while real Influx
+// disagreed — so this harness structurally CANNOT catch the caveat documented on
+// fixedAxisStart. Model Flux's stretched local grid here before adding one.
 func replayAggregateWindow(deviceID string, samples []sample, start, stop time.Time, iv Interval, loc *time.Location) []influx.Row {
 	var rows []influx.Row
 	// Walk the grid from the local midnight of the range start's date. That is
