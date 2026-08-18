@@ -19,6 +19,10 @@ and `statehouse` (real-time state), and mirrors their conventions. See
 - **Left-edge buckets.** Flux `aggregateWindow` is called with
   `timeSrc: "_start"` so values align to the Go-owned canonical bucket axis;
   empty buckets are `null` (no reading), not zero.
+- **Grid-aligned bucket axis.** The canonical axis is snapped onto the interval
+  grid anchored at **local midnight** — the same grid Influx's location-aware
+  `aggregateWindow` uses. So a `6h` axis is 00/06/12/18 local in both GMT and
+  BST, and every Influx bucket stamp exact-matches a Go bucket.
 
 ## HTTP API
 
@@ -48,6 +52,16 @@ requires a Bearer JWT (user **or** service token).
   `<N>h` is an **exact** trailing N hours (e.g. `24h`), not midnight-aligned. Use these for
   "last 7 days" / "last 30 days" (`7d`/`30d`), as distinct from `week`/`month`, which reset
   on Monday / the 1st.
+- **Bucket labels are grid-aligned, so the first bucket may start before `from`.**
+  A window whose start is off the interval grid (every `<N>h`, and a `custom`
+  `from` that is not on the grid) has its first bucket widened back to the grid
+  boundary containing `from`. That leading slice carries no in-window data — the
+  query range still begins at `from` — and it is what keeps every bucket's value
+  describing the span its label claims. `today`/`week`/`month`/`<N>d` start at
+  local midnight and are already on every sub-day grid, so they are unchanged.
+  Known caveat: a sub-day interval over a window that *crosses* a DST transition
+  steps by fixed duration and drifts an hour off Flux's stretched local grid
+  after the changeover.
 - `interval` — `5m,15m,30m,1h,6h,1d`; smart default per window, ~2500-bucket cap
   (admits 5-minute resolution over a 7-day window, ~2016 buckets).
 - `field` — one of `temperature_c, humidity_pct, pressure_hpa, wind_speed_ms,

@@ -105,8 +105,52 @@ type SeriesResponse struct {
 	Series   []Series    `json:"series"`
 }
 
+// fixedAxisStart returns the first canonical bucket start for a FIXED (sub-day)
+// interval: start snapped DOWN onto the interval grid anchored at the local
+// midnight of start's own date in loc. start is expected to already be in loc.
+//
+// Snapping is what keeps the Go-owned axis on the same boundaries as Influx.
+// influx.BuildFieldSeriesFlux calls aggregateWindow with
+// location: timezone.location(tz), which anchors its windows to local midnight
+// in that zone, so its timeSrc:"_start" stamps land on the grid regardless of
+// where the query range begins. An UNSNAPPED axis stepping straight off a
+// caller-derived start therefore had boundaries Influx could never exact-match,
+// and resolveBucket's snap-back rule — correct for a right-edge or interior
+// stamp — could not tell those apart from an Influx LEFT edge falling inside a
+// Go bucket. Every row landed in the preceding bucket and the whole series was
+// reported one bucket early. That hit every "<N>h" rolling window (their start
+// is now - N hours, deliberately not midnight-aligned) and any custom `from` off
+// the grid, at every sub-day interval. See issue #18.
+//
+// Anchoring at LOCAL MIDNIGHT rather than the Unix epoch is the load-bearing
+// part: a 6h grid must be 00/06/12/18 local in both GMT and BST, which an
+// epoch-anchored (UTC) grid gets an hour wrong for the whole of British Summer
+// Time.
+//
+// Accepted trade: for an off-grid window the first bucket widens back to its
+// grid boundary, so it is labelled a little before win.Start. That slice carries
+// no in-window data — the query range still starts at win.Start — and the
+// alternative is the shifted axis above. Countinghouse made the same trade.
+//
+// Known caveat, pre-existing and unchanged by the snap: a sub-day interval over
+// a window that CROSSES a DST transition still steps by fixed duration from this
+// anchor, so after the changeover it drifts an hour off Flux's stretched local
+// grid. It needs both a sub-day interval and a window spanning the transition;
+// the calendar (1d) branch is unaffected.
+func fixedAxisStart(start time.Time, iv Interval, loc *time.Location) time.Time {
+	anchor := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, loc)
+	off := start.Sub(anchor) % iv.Duration
+	if off < 0 {
+		// Defensive: a zone whose local midnight does not exist could put start
+		// before its own anchor. Go's % keeps the dividend's sign, so normalise
+		// to [0, Duration) rather than snapping FORWARD past the window start.
+		off += iv.Duration
+	}
+	return start.Add(-off)
+}
+
 // BucketStarts returns the canonical local-timezone bucket-start axis for win
-// at iv: the ascending list of bucket starts from win.Start up to (but not
+// at iv: the ascending list of bucket starts covering win.Start up to (but not
 // including) win.Stop. This axis is the single source of truth every series
 // aligns to; Influx results are demuxed onto it and gaps are NaN-filled.
 //
@@ -114,7 +158,13 @@ type SeriesResponse struct {
 // time.Date(year, month, day+1, ...), so a London day that is 23h (spring
 // forward) or 25h (autumn back) is still a single bucket starting at local
 // midnight — DST-correct. For fixed (sub-day) intervals the axis steps by
-// iv.Duration from the (local) window start.
+// iv.Duration from fixedAxisStart, i.e. from the grid cell CONTAINING the
+// window start rather than from the raw start — see fixedAxisStart for why.
+//
+// countBuckets in interval.go computes this axis's LENGTH without materializing
+// it, to guard MaxBuckets cheaply. The two must agree exactly for any in-cap
+// window; both derive the first fixed bucket from fixedAxisStart so they cannot
+// drift apart.
 func BucketStarts(win Window, iv Interval, loc *time.Location) []time.Time {
 	if loc == nil {
 		loc = time.UTC
@@ -133,7 +183,7 @@ func BucketStarts(win Window, iv Interval, loc *time.Location) []time.Time {
 		return out
 	}
 
-	for cur := start; cur.Before(stop); cur = cur.Add(iv.Duration) {
+	for cur := fixedAxisStart(start, iv, loc); cur.Before(stop); cur = cur.Add(iv.Duration) {
 		out = append(out, cur)
 	}
 	return out

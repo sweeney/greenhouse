@@ -156,11 +156,19 @@ func suggestCoarser(win Window, loc *time.Location) string {
 // large is allocated; BucketStarts is only ever called once the count is known
 // to be in-cap.
 //
-//   - Fixed (sub-day) intervals: exact O(1) arithmetic — ceil(span/Duration),
-//     computed with a modulo so a clamped/huge span cannot overflow.
+//   - Fixed (sub-day) intervals: exact O(1) arithmetic — ceil(span/Duration)
+//     measured from the SNAPPED first bucket, computed with a modulo so a
+//     clamped/huge span cannot overflow.
 //   - Calendar (1d) intervals: step by local date like BucketStarts, but stop
 //     the moment the count passes MaxBuckets so an absurd span can't walk
 //     centuries.
+//
+// The fixed branch must measure from fixedAxisStart, not from win.Start: an
+// off-grid window's axis begins at the grid cell CONTAINING the start, so it can
+// span one more bucket than the raw duration implies (an exactly-24h window
+// starting at 11:05 touches 25 hourly cells, not 24). Counting from the raw
+// start under-reports by that bucket, which would apply MaxBuckets to a count
+// the response does not actually have and break the agreement contract above.
 func countBuckets(win Window, iv Interval, loc *time.Location) int {
 	if loc == nil {
 		loc = time.UTC
@@ -170,10 +178,12 @@ func countBuckets(win Window, iv Interval, loc *time.Location) int {
 	}
 
 	if !iv.Calendar {
-		// Fixed step: ceil(span/Duration). time.Time.Sub clamps an enormous
-		// range to the max Duration, so avoid the (span+Duration-1) form that
-		// would overflow and compute ceil via a modulo instead.
-		span := win.Stop.Sub(win.Start)
+		// Fixed step: ceil(span/Duration) from the snapped first bucket.
+		// time.Time.Sub clamps an enormous range to the max Duration, so avoid
+		// the (span+Duration-1) form that would overflow and compute ceil via a
+		// modulo instead.
+		first := fixedAxisStart(win.Start.In(loc), iv, loc)
+		span := win.Stop.Sub(first)
 		n := span / iv.Duration
 		if span%iv.Duration != 0 {
 			n++
