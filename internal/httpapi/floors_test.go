@@ -263,3 +263,28 @@ func TestDeviceSeries_IgnoresFloorsFilter(t *testing.T) {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
 }
+
+// A floor and a room are independent properties, so a device may declare one
+// without the other (see config.TestDeviceConfig_FloorWithoutRoom). floors=
+// selects such a device, but group_by=room keys on rooms and it has none — so it
+// is absent from that view rather than keyed on "". Pinned because floors= is how
+// a caller asks for a whole storey, and this is the one way that view is short.
+func TestSeries_FloorsFilter_GroupByRoomOmitsARoomlessDevice(t *testing.T) {
+	s, q := dataSetup(t)
+	s.Config = fakeConfig{devices: map[string]config.DeviceConfig{
+		"sensor_e": {Class: "environmental_sensor", Floor: "floor1", DisplayName: "Sensor E"},
+		"sensor_f": {
+			Class: "environmental_sensor", Floor: "floor1", Room: "floor1.room-a",
+			DisplayName: "Sensor F",
+		},
+	}}
+	q.QueryFunc = func(string) ([]influx.Row, error) {
+		return bucketRows(t, s, "sensor_e", "today", "1h", 20), nil
+	}
+
+	// The floor filter itself selects both: floors= reads Floor, not Room.
+	assertKeys(t, floorKeys(t, s, "floors=floor1"), "sensor_e", "sensor_f")
+
+	// Grouping by room drops the room-less one, and never invents a "" key.
+	assertKeys(t, floorKeys(t, s, "floors=floor1&group_by=room"), "floor1.room-a")
+}

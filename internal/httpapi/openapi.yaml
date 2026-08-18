@@ -63,7 +63,7 @@ paths:
     get:
       summary: Climate device catalog
       description: >
-        Discovery catalog of climate devices from the statehouse_devices
+        Discovery catalog of climate devices from the configured devices
         namespace, each with its room, its declared `floor`,
         and an `environment_fields` hint of the fields it writes to the
         device_environment measurement.
@@ -230,7 +230,7 @@ components:
       name: id
       in: path
       required: true
-      description: Device id (key in the statehouse_devices namespace).
+      description: Device id (key in the configured devices namespace).
       schema:
         type: string
     Window:

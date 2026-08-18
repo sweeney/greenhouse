@@ -147,7 +147,7 @@ const CoverageHouse = "house"
 // ReportsEnvironment reports whether greenhouse charts this device — i.e.
 // whether its class writes to the `device_environment` measurement. It is the
 // single predicate behind the device catalog, the series device set, and the
-// devices=/rooms= filters.
+// devices=/rooms=/floors= filters.
 func (d DeviceConfig) ReportsEnvironment() bool {
 	_, ok := climateClasses[d.Class]
 	return ok

@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -240,18 +241,9 @@ func TestIntegration_SpecDocumentsFloors(t *testing.T) {
 	if _, ok := entry.Properties["floor"]; !ok {
 		t.Error("DeviceCatalogEntry does not document 'floor'")
 	}
-	if !slicesContains(entry.Required, "floor") {
+	if !slices.Contains(entry.Required, "floor") {
 		t.Errorf("'floor' is always present in the response, so it must be required: %v", entry.Required)
 	}
-}
-
-func slicesContains(s []string, v string) bool {
-	for _, x := range s {
-		if x == v {
-			return true
-		}
-	}
-	return false
 }
 
 // The field registry is untouched by the floor work — a cheap guard that the new

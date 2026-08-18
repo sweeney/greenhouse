@@ -161,10 +161,19 @@ entry declares no floor is UNKNOWN — reported as `""`, and never matched by `f
 — rather than guessed at.
 
 `/series` accepts `floors=` for the same vocabulary, so a floor read off the catalog
-can be handed straight back as a filter. Grouping is still `device` or `room`: there is
-no `group_by=floor`, because a floor-wide mean would average rooms of wildly different
-character (a sun-facing room with a cold stairwell) into a number that describes
-nowhere. Chart the rooms on a floor with `floors=…&group_by=room`.
+can be handed straight back as a filter. Grouping is still `device` or `room` — there is
+no `group_by=floor` **yet**. Chart the rooms on a floor with `floors=…&group_by=room`,
+noting that `group_by=room` keys on rooms, so a device with a declared floor but no room
+id is absent from that view; `group_by=device` charts it.
+
+Floor grouping is deferred, not rejected. The objection to it — that a floor-wide mean
+averages rooms of wildly different character into a number describing nowhere — argues
+against a *hardcoded* floor mean, and `group_by=room` already applies exactly that
+hardcoded cross-member mean with no way for a caller to ask for anything else. The fix
+is one the room case needs too: a `group_fn` (`mean`/`min`/`max`, applied after `fn`)
+that lets a caller say which question they are asking, so a floor can render as a
+min–max band with the mean through it and heterogeneity shows up as the band's width.
+That is a larger change than a new filter, so it is tracked separately.
 
 ## Config
 
