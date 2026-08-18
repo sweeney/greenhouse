@@ -173,7 +173,7 @@ hardcoded cross-member mean with no way for a caller to ask for anything else. T
 is one the room case needs too: a `group_fn` (`mean`/`min`/`max`, applied after `fn`)
 that lets a caller say which question they are asking, so a floor can render as a
 min–max band with the mean through it and heterogeneity shows up as the band's width.
-That is a larger change than a new filter, so it is tracked separately.
+That is a larger change than a new filter, so it is tracked in #23.
 
 ## Config
 
