@@ -100,7 +100,10 @@ paths:
         never a sum). field selects the measurement (default temperature_c); fn
         selects the per-bucket aggregation (mean default, min, max, last). The
         shape param chooses columnar (default) or row-oriented output. Empty
-        buckets are null (no reading), not zero.
+        buckets are null (no reading), not zero. Bucket starts are snapped to
+        the local-midnight interval grid, so the first bucket of an off-grid
+        window (any "<N>h" window, or a non-grid-aligned custom from) begins
+        slightly before `from`.
       operationId: getSeries
       tags: [data]
       parameters:
@@ -513,7 +516,14 @@ components:
           items:
             type: string
             format: date-time
-          description: Local-timezone bucket-start axis every series aligns to.
+          description: >
+            Local-timezone bucket-start axis every series aligns to. Bucket
+            starts are snapped onto the interval grid anchored at local midnight
+            (the same grid Influx aggregates on), so each value describes the
+            span its bucket is labelled with. For a window whose start is off
+            that grid (any "<N>h" window, or a custom from that is not
+            grid-aligned) the FIRST bucket start is therefore slightly earlier
+            than `from`; that leading slice carries no in-window data.
         series:
           type: array
           items:
