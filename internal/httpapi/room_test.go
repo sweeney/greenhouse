@@ -143,3 +143,37 @@ func TestRemovedLocationsParamIsRejectedNotIgnored(t *testing.T) {
 		t.Errorf("the error must name the replacement: %s", w.Body.String())
 	}
 }
+
+// Once the namespace publishes room ids, the catalog reports the floor derived
+// from each one. It is derived, never configured, so it cannot disagree with the
+// room it came from.
+func TestDevices_FloorDerivedFromRoomID(t *testing.T) {
+	s, _ := dataSetup(t)
+	s.Config = fakeConfig{devices: map[string]config.DeviceConfig{
+		"climate_kitchen": {
+			Class: "environmental_sensor", Room: "groundfloor.kitchen", DisplayName: "Kitchen",
+		},
+		"climate_drawingroom": {
+			Class: "environmental_sensor", Room: "firstfloor.drawing-room", DisplayName: "Drawing Room",
+		},
+		// Not yet migrated: no room id, so no floor to report.
+		"climate_basement": {
+			Class: "environmental_sensor", Location: "basement", DisplayName: "Basement",
+		},
+	}}
+
+	want := map[string]string{
+		"climate_kitchen":     "groundfloor",
+		"climate_drawingroom": "firstfloor",
+		"climate_basement":    "",
+	}
+	got := map[string]string{}
+	for _, d := range getCatalog(t, s).Devices {
+		got[d.ID] = d.Floor
+	}
+	for id, w := range want {
+		if got[id] != w {
+			t.Errorf("%s: floor = %q, want %q", id, got[id], w)
+		}
+	}
+}

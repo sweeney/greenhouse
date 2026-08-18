@@ -34,7 +34,7 @@ requires a Bearer JWT (user **or** service token).
 |---|---|
 | `GET /healthz` | status, version, uptime, influx_reachable, remote_config status |
 | `GET /openapi.json` | the OpenAPI spec as JSON |
-| `GET /devices` | climate device catalog: id, display_name, room, class, and an `environment_fields` hint |
+| `GET /devices` | climate device catalog: id, display_name, room, floor, class, and an `environment_fields` hint |
 | `GET /devices/{id}/series` | single-device, single-field time-series |
 | `GET /series` | multi-series; `group_by` device (default) or room (mean per room) |
 | `GET /devices/{id}/latest` | the device's most recent reading across its fields (within the last 7 days) |
@@ -75,10 +75,17 @@ requires a Bearer JWT (user **or** service token).
 - `devices` — (`/series` only) CSV of device ids to chart, e.g.
   `devices=climate_groundfloor,climate_firstfloor`. Restricts the series to those
   sensors (omit for all climate devices). An unknown or non-climate id → 400.
+  Composes with `rooms` and `floors` as AND.
 - `rooms` — (`/series` only) CSV of floorplan room ids to chart, e.g.
   `rooms=groundfloor.kitchen,firstfloor.drawing-room`. The candidate set is always
   climate sensors only, so a non-climate device sharing a room is never included,
-  and a room with no climate sensor → 400. Composes with `devices` as AND.
+  and a room with no climate sensor → 400. Composes with `devices` and `floors` as AND.
+- `floors` — (`/series` only) CSV of floors to chart, e.g.
+  `floors=groundfloor,firstfloor`. The coarse sibling of `rooms`: it selects every
+  climate sensor whose room id sits on one of those floors, so a caller does not have
+  to enumerate the floorplan. A floor with no climate sensor → 400, and a device with
+  no room id has an unknown floor and is never selected. Composes with `devices` and
+  `rooms` as AND.
 - `shape` — `columns` (default, shared buckets axis + per-series arrays) \|
   `rows` (flat one-row-per-(series,bucket)). Both carry `field`/`unit`/`fn`.
 
@@ -145,6 +152,18 @@ and the `location` response field are all gone. Use `group_by=room`, `rooms=` an
 Greenhouse reads whichever the devices namespace carries. A namespace still declaring
 `location` keeps working untouched, which is what lets the namespace and its consumers
 migrate independently.
+
+`/devices` also reports a `floor` per device. It is **derived** from the room id's
+leading segment (`groundfloor.kitchen` -> `groundfloor`), never configured separately,
+so it cannot disagree with the room it came from. It is empty when the floor is
+unknown — a device still carrying a free-text `location` has no floor prefix to read,
+and greenhouse reports "unknown" rather than guessing.
+
+`/series` accepts `floors=` for the same vocabulary, so a floor read off the catalog
+can be handed straight back as a filter. Grouping is still `device` or `room`: there is
+no `group_by=floor`, because a floor-wide mean would average rooms of wildly different
+character (a sunny drawing room with a cold hallway) into a number that describes
+nowhere. Chart the rooms on a floor with `floors=…&group_by=room`.
 
 ## Config
 

@@ -1,6 +1,9 @@
 package config
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 // Thresholds describes the per-class activity detection thresholds.
 // Greenhouse does not use thresholds itself, but the struct is mirrored
@@ -121,6 +124,25 @@ func (d DeviceConfig) Place() string {
 		return ""
 	}
 	return d.Location
+}
+
+// Floor returns the floor this device sits on: the segment before the first "."
+// in its room id, so "groundfloor.kitchen" is on "groundfloor".
+//
+// It is DERIVED rather than configured. The floorplan taxonomy already encodes the
+// floor in the room id, so a separate config key would be a second spelling of the
+// same fact and could disagree with the room it belongs to.
+//
+// It returns "" when the floor is genuinely unknown rather than guessing one: a
+// device still carrying the deprecated free-text Location ("basement", "garden")
+// has no floor prefix to read, and neither does an unplaced device. Callers get
+// "unknown", never a wrong floor.
+func (d DeviceConfig) Floor() string {
+	i := strings.Index(d.Place(), ".")
+	if i <= 0 {
+		return ""
+	}
+	return d.Place()[:i]
 }
 
 // CoverageHouse is the legacy `location` value meaning a device's readings describe

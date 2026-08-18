@@ -161,3 +161,30 @@ func TestMayReportField(t *testing.T) {
 		t.Error("an empty list must behave as undeclared, not as 'reports nothing'")
 	}
 }
+
+// Floor is derived from the room id's "<floor>.<slug>" shape, and returns ""
+// whenever the floor is genuinely unknown rather than guessing one.
+func TestDeviceConfig_Floor(t *testing.T) {
+	cases := []struct {
+		name string
+		dev  DeviceConfig
+		want string
+	}{
+		{"room id", DeviceConfig{Room: "groundfloor.kitchen"}, "groundfloor"},
+		{"hyphenated slug", DeviceConfig{Room: "firstfloor.drawing-room"}, "firstfloor"},
+		{"nested slug takes the first segment", DeviceConfig{Room: "secondfloor.bath.ensuite"}, "secondfloor"},
+		{"legacy free-text location has no floor", DeviceConfig{Location: "basement"}, ""},
+		{"house sentinel resolves to no room, so no floor", DeviceConfig{Location: CoverageHouse}, ""},
+		{"unplaced device", DeviceConfig{}, ""},
+		{"leading dot is not a floor", DeviceConfig{Room: ".kitchen"}, ""},
+		// Room wins over the deprecated Location, exactly as Place does.
+		{"room beats location", DeviceConfig{Room: "thirdfloor.attic", Location: "loft"}, "thirdfloor"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.dev.Floor(); got != tc.want {
+				t.Errorf("Floor() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

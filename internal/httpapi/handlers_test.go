@@ -112,6 +112,7 @@ type catalogResp struct {
 		ID                string   `json:"id"`
 		Class             string   `json:"class"`
 		Room              string   `json:"room"`
+		Floor             string   `json:"floor"`
 		EnvironmentFields []string `json:"environment_fields"`
 	} `json:"devices"`
 }
@@ -173,6 +174,18 @@ func TestDevices_IncludesFireAlarm(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("fire alarm missing from catalog: %+v", resp.Devices)
+	}
+}
+
+// The catalog reports a floor derived from the room id, and reports it as empty
+// rather than guessing when the device is still on a free-text location — which
+// is what every device in the pre-migration fixture carries.
+func TestDevices_FloorIsEmptyWithoutARoomID(t *testing.T) {
+	s, _ := dataSetup(t)
+	for _, d := range getCatalog(t, s).Devices {
+		if d.Floor != "" {
+			t.Errorf("%s: floor = %q, want empty — %q is a legacy location, not a room id", d.ID, d.Floor, d.Room)
+		}
 	}
 }
 

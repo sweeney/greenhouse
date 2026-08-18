@@ -64,8 +64,9 @@ paths:
       summary: Climate device catalog
       description: >
         Discovery catalog of climate devices from the statehouse_devices
-        namespace, each with an `environment_fields` hint of the fields it
-        writes to the device_environment measurement.
+        namespace, each with its room, the `floor` derived from that room id,
+        and an `environment_fields` hint of the fields it writes to the
+        device_environment measurement.
 
         A device is charted when its class reports environmental telemetry:
         `environmental_sensor` (purpose-built sensors) or `fire_alarm` (the
@@ -116,6 +117,7 @@ paths:
         - $ref: "#/components/parameters/GroupBy"
         - $ref: "#/components/parameters/Devices"
         - $ref: "#/components/parameters/Rooms"
+        - $ref: "#/components/parameters/Floors"
         - $ref: "#/components/parameters/Shape"
       responses:
         "200":
@@ -343,7 +345,7 @@ components:
         devices=climate_groundfloor,climate_firstfloor. Restricts the series to
         those climate sensors; omit for all climate devices. An unknown id, or an
         id that exists but is not a climate sensor, returns 400. Composes with
-        `rooms` as AND.
+        `rooms` and `floors` as AND.
       schema:
         type: string
     Rooms:
@@ -355,7 +357,20 @@ components:
         rooms=groundfloor.kitchen,firstfloor.drawing-room. The candidate set is
         always climate sensors only, so a non-climate device sharing a room is
         never included; a room with no climate sensor returns 400. Composes with
-        `devices` as AND.
+        `devices` and `floors` as AND.
+      schema:
+        type: string
+    Floors:
+      name: floors
+      in: query
+      required: false
+      description: >
+        CSV of floors to chart, e.g. floors=groundfloor,firstfloor. Selects every
+        climate sensor whose room id sits on one of those floors — the coarse
+        sibling of `rooms`. The candidate set is always climate sensors only; a
+        floor with no climate sensor returns 400. A device with no floorplan room
+        id has an unknown floor and is never selected by `floors`. Composes with
+        `devices` and `rooms` as AND.
       schema:
         type: string
     Shape:
@@ -648,7 +663,14 @@ components:
           type: string
         room:
           type: string
-          description: Floorplan room id.
+          description: Floorplan room id, "<floor>.<slug>".
+        floor:
+          type: string
+          description: >
+            The floor this device sits on, derived from the room id's leading
+            segment (groundfloor.kitchen -> groundfloor). Empty when unknown —
+            a device still carrying a deprecated free-text location has no floor
+            prefix to read, and greenhouse does not guess one.
         class:
           type: string
         environment_fields:
@@ -659,7 +681,7 @@ components:
             Fields this device writes to device_environment, from the config key
             of the same name. Falls back to the full field registry when config
             does not declare it, in which case it may over-advertise.
-      required: [id, display_name, room, class, environment_fields]
+      required: [id, display_name, room, floor, class, environment_fields]
 
     DevicesCatalog:
       type: object
