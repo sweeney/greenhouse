@@ -7,14 +7,14 @@ import (
 
 func TestNormaliseDevicesLegacyShorthand(t *testing.T) {
 	devices := map[string]DeviceConfig{
-		"glowsensorth1": {
+		"probe_a": {
 			IEEEAddress:  "0x00124b00",
 			FriendlyName: "Glow Sensor",
 			Class:        "environmental_sensor",
 		},
 	}
 	normaliseDevices(devices)
-	d := devices["glowsensorth1"]
+	d := devices["probe_a"]
 	if d.Scheme != "zigbee" {
 		t.Errorf("scheme = %q, want zigbee", d.Scheme)
 	}
@@ -28,7 +28,7 @@ func TestNormaliseDevicesLegacyShorthand(t *testing.T) {
 
 func TestNormaliseDevicesDoesNotOverrideCanonical(t *testing.T) {
 	devices := map[string]DeviceConfig{
-		"weatherstation": {
+		"outdoor_station": {
 			Scheme:       "tasmota",
 			Primary:      "tasmota-123",
 			Display:      "Canonical Name",
@@ -37,7 +37,7 @@ func TestNormaliseDevicesDoesNotOverrideCanonical(t *testing.T) {
 		},
 	}
 	normaliseDevices(devices)
-	d := devices["weatherstation"]
+	d := devices["outdoor_station"]
 	if d.Scheme != "tasmota" {
 		t.Errorf("scheme = %q, want tasmota preserved", d.Scheme)
 	}
@@ -51,10 +51,10 @@ func TestNormaliseDevicesDoesNotOverrideCanonical(t *testing.T) {
 
 func TestNormaliseDevicesNoLegacyFields(t *testing.T) {
 	devices := map[string]DeviceConfig{
-		"climate_basement": {Class: "environmental_sensor"},
+		"sensor_a": {Class: "environmental_sensor"},
 	}
 	normaliseDevices(devices)
-	d := devices["climate_basement"]
+	d := devices["sensor_a"]
 	if d.Scheme != "" {
 		t.Errorf("scheme = %q, want empty (no legacy fields to imply zigbee)", d.Scheme)
 	}
@@ -73,7 +73,7 @@ func TestReportsEnvironment(t *testing.T) {
 	}{
 		{"purpose-built sensor", "environmental_sensor", true},
 		// Fire alarms report temperature_c alongside their smoke state, and in
-		// office/utility they are the ONLY environment source.
+		// those rooms they are the ONLY environment source.
 		{"fire alarm", "fire_alarm", true},
 		{"power device", "continuous_power_device", false},
 		{"cycle power device", "cycle_power_device", false},
@@ -159,5 +159,52 @@ func TestMayReportField(t *testing.T) {
 	empty := DeviceConfig{Class: "environmental_sensor", EnvironmentFields: []string{}}
 	if !empty.MayReportField("rainfall_mm") {
 		t.Error("an empty list must behave as undeclared, not as 'reports nothing'")
+	}
+}
+
+// Floor is a first-class property of the devices namespace, so it is DECODED,
+// never derived: the floorplan owns the fact, and re-deriving it from the room id
+// would be a second implementation of someone else's taxonomy.
+func TestDeviceConfig_FloorDecodesFromNamespace(t *testing.T) {
+	// The remote namespace is JSON, and this is the shape it publishes: floor
+	// alongside room, not encoded inside it.
+	var d DeviceConfig
+	body := `{"class":"environmental_sensor","floor":"floor2","room":"floor2.room-a"}`
+	if err := json.Unmarshal([]byte(body), &d); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if d.Floor != "floor2" {
+		t.Errorf("Floor = %q, want floor2", d.Floor)
+	}
+	if d.Room != "floor2.room-a" {
+		t.Errorf("Room = %q, want floor2.room-a", d.Room)
+	}
+}
+
+// An undeclared floor is UNKNOWN, and greenhouse leaves it empty rather than
+// reaching into the room id for a guess. Nothing downstream may invent one: the
+// catalog reports it empty and the floors= filter never matches it.
+func TestDeviceConfig_FloorIsEmptyWhenUndeclared(t *testing.T) {
+	var d DeviceConfig
+	if err := json.Unmarshal([]byte(`{"class":"environmental_sensor","room":"floor2.room-a"}`), &d); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if d.Floor != "" {
+		t.Errorf("Floor = %q, want empty: the namespace declared none", d.Floor)
+	}
+}
+
+// A floor may be declared for a device that has no room id at all — the two are
+// independent properties, so neither implies the other.
+func TestDeviceConfig_FloorWithoutRoom(t *testing.T) {
+	var d DeviceConfig
+	if err := json.Unmarshal([]byte(`{"class":"environmental_sensor","floor":"floor1"}`), &d); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if d.Floor != "floor1" {
+		t.Errorf("Floor = %q, want floor1", d.Floor)
+	}
+	if d.Place() != "" {
+		t.Errorf("Place() = %q, want empty: no room and no location", d.Place())
 	}
 }

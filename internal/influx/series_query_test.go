@@ -26,14 +26,14 @@ func TestBuildFieldSeriesFlux_StampLeftEdge(t *testing.T) {
 }
 
 func TestBuildFieldSeriesFlux(t *testing.T) {
-	flux := BuildFieldSeriesFlux("statehouse", []string{"climate_basement", "climate_weatherstation"}, "temperature_c", "mean", seriesStart, seriesStop, "1h", "Europe/London")
+	flux := BuildFieldSeriesFlux("statehouse", []string{"sensor_a", "outdoor_station"}, "temperature_c", "mean", seriesStart, seriesStop, "1h", "Europe/London")
 
 	wants := []string{
 		`import "timezone"`,
 		`from(bucket: "statehouse")`,
 		`r._measurement == "device_environment"`,
 		`r._field == "temperature_c"`,
-		`contains(value: r.device_id, set: ["climate_basement", "climate_weatherstation"])`,
+		`contains(value: r.device_id, set: ["sensor_a", "outdoor_station"])`,
 		`aggregateWindow(every: 1h, fn: mean, timeSrc: "_start", location: timezone.location(name: "Europe/London"), createEmpty: true)`,
 		// No pad for a gauge series: range starts AT the window start.
 		`start: 2026-06-11T00:00:00Z`,
@@ -77,12 +77,12 @@ func TestBuildFieldSeriesFlux_FieldAndFnParameterised(t *testing.T) {
 }
 
 func TestBuildLatestFlux(t *testing.T) {
-	flux := BuildLatestFlux("statehouse", "climate_weatherstation", "7d")
+	flux := BuildLatestFlux("statehouse", "outdoor_station", "7d")
 	wants := []string{
 		`from(bucket: "statehouse")`,
 		`range(start: -7d)`,
 		`r._measurement == "device_environment"`,
-		`r.device_id == "climate_weatherstation"`,
+		`r.device_id == "outdoor_station"`,
 		`group(columns: ["_field"])`,
 		`last()`,
 	}

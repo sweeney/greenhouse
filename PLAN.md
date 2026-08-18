@@ -39,10 +39,11 @@ Measurement **`device_environment`**, tags `device_id`, `class`, `location`. Fie
 | `illuminance_lux` | lux | weather station |
 | `uv_index` | index | weather station |
 
-Devices (classes `environmental_sensor` + `fire_alarm` in `statehouse_devices`): `climate_basement`,
-`climate_groundfloor`, `climate_firstfloor`, `climate_secondfloor`, `climate_thirdfloor`
-(indoor temp/humidity), `glowsensorth1` (network cabinet), and `climate_weatherstation`
-(outdoor, full set; `location: garden`). Bucket: `statehouse` (org `swee.net`, 2-yr retention).
+Devices: every entry in the devices namespace whose class is `environmental_sensor` or
+`fire_alarm` — indoor sensors reporting temperature/humidity, one outdoor station
+reporting the full field set, and fire alarms reporting temperature only. The live
+inventory lives in the namespace, not here, so this document does not enumerate it.
+Bucket: `statehouse` (org `swee.net`, 2-yr retention).
 
 ### Query (the heart of greenhouse)
 One field, mean/min/max per bucket, DST-aware local buckets, **left-edge stamped** (the

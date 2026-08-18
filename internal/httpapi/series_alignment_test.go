@@ -101,7 +101,7 @@ func alignedSetup(t *testing.T) (*Server, *influx.FakeQuerier) {
 	s, q := dataSetup(t)
 	s.Clock = testutil.NewFakeClock(offGridNow(t, s.Loc))
 	s.Config = fakeConfig{devices: map[string]config.DeviceConfig{
-		"climate_basement": {Class: "environmental_sensor", Location: "basement", DisplayName: "Basement"},
+		"sensor_a": {Class: "environmental_sensor", Location: "area-a", DisplayName: "Sensor A"},
 	}}
 	return s, q
 }
@@ -121,7 +121,7 @@ func TestSeriesHTTP_RollingWindowBucketsAreOnTheGrid(t *testing.T) {
 	} {
 		t.Run(tc.interval, func(t *testing.T) {
 			s, q := alignedSetup(t)
-			q.QueryFunc = rampingReplay(s, "climate_basement", "24h", tc.interval)
+			q.QueryFunc = rampingReplay(s, "sensor_a", "24h", tc.interval)
 
 			w := doGET(t, s, "/series?field=temperature_c&fn=mean&group_by=device&window=24h&interval="+tc.interval)
 			if w.Code != http.StatusOK {
@@ -158,7 +158,7 @@ func TestSeriesHTTP_RollingWindowBucketsAreOnTheGrid(t *testing.T) {
 // ramp read one degree high in every bucket.
 func TestSeriesHTTP_RollingWindowValuesMatchTheirLabel(t *testing.T) {
 	s, q := alignedSetup(t)
-	q.QueryFunc = rampingReplay(s, "climate_basement", "24h", "1h")
+	q.QueryFunc = rampingReplay(s, "sensor_a", "24h", "1h")
 
 	win, err := climate.ResolveWindow(s.Clock.Now(), s.Loc, "24h", time.Time{}, time.Time{})
 	if err != nil {
@@ -209,7 +209,7 @@ func TestSeriesHTTP_RollingWindowValuesMatchTheirLabel(t *testing.T) {
 // that rows does not regress independently.
 func TestSeriesHTTP_RowsShapeSharesTheAlignedAxis(t *testing.T) {
 	s, q := alignedSetup(t)
-	q.QueryFunc = rampingReplay(s, "climate_basement", "24h", "1h")
+	q.QueryFunc = rampingReplay(s, "sensor_a", "24h", "1h")
 
 	w := doGET(t, s, "/series?field=temperature_c&fn=mean&group_by=device&window=24h&interval=1h&shape=rows")
 	if w.Code != http.StatusOK {
@@ -244,9 +244,9 @@ func TestSeriesHTTP_RowsShapeSharesTheAlignedAxis(t *testing.T) {
 // which builds its own window and axis through the same helpers.
 func TestDeviceSeriesHTTP_RollingWindowIsAligned(t *testing.T) {
 	s, q := alignedSetup(t)
-	q.QueryFunc = rampingReplay(s, "climate_basement", "48h", "1h")
+	q.QueryFunc = rampingReplay(s, "sensor_a", "48h", "1h")
 
-	w := doGET(t, s, "/devices/climate_basement/series?field=temperature_c&fn=mean&window=48h&interval=1h")
+	w := doGET(t, s, "/devices/sensor_a/series?field=temperature_c&fn=mean&window=48h&interval=1h")
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -272,7 +272,7 @@ func TestDeviceSeriesHTTP_RollingWindowIsAligned(t *testing.T) {
 // pages use was affected too.
 func TestSeriesHTTP_DefaultIntervalRollingIsAligned(t *testing.T) {
 	s, q := alignedSetup(t)
-	q.QueryFunc = rampingReplay(s, "climate_basement", "24h", "1h")
+	q.QueryFunc = rampingReplay(s, "sensor_a", "24h", "1h")
 
 	w := doGET(t, s, "/series?field=temperature_c&window=24h")
 	if w.Code != http.StatusOK {
@@ -302,7 +302,7 @@ func TestSeriesHTTP_AxisDoesNotMoveWithNow(t *testing.T) {
 	for _, drift := range []time.Duration{0, 37 * time.Second, 11 * time.Minute, 41 * time.Minute} {
 		s, q := alignedSetup(t)
 		s.Clock = testutil.NewFakeClock(base.Add(drift))
-		q.QueryFunc = rampingReplay(s, "climate_basement", "24h", "1h")
+		q.QueryFunc = rampingReplay(s, "sensor_a", "24h", "1h")
 
 		w := doGET(t, s, "/series?field=temperature_c&fn=mean&window=24h&interval=1h")
 		if w.Code != http.StatusOK {
@@ -336,7 +336,7 @@ func TestSeriesHTTP_OnGridWindowsUnchanged(t *testing.T) {
 	for _, spec := range []string{"today", "7d"} {
 		for _, iv := range []string{"1h", "6h"} {
 			s, q := alignedSetup(t)
-			q.QueryFunc = rampingReplay(s, "climate_basement", spec, iv)
+			q.QueryFunc = rampingReplay(s, "sensor_a", spec, iv)
 
 			w := doGET(t, s, fmt.Sprintf("/series?field=temperature_c&fn=mean&window=%s&interval=%s", spec, iv))
 			if w.Code != http.StatusOK {

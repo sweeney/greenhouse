@@ -22,12 +22,12 @@
   "interval": "1h",
   "series": [
     {
-      "key": "climate_basement",
-      "label": "Basement",
+      "key": "sensor_a",
+      "label": "Sensor A",
       "max": 20,
       "mean": 20,
       "min": 20,
-      "room": "basement.hallway",
+      "room": "floor1.room-a",
       "values": [
         20,
         20,

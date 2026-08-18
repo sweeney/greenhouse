@@ -144,9 +144,9 @@ func assertBucketsCarryTheirOwnSpan(t *testing.T, label string, resp SeriesRespo
 // aggregateWindow behaviour for the window/interval under test.
 func buildReplayed(t *testing.T, win Window, iv Interval, loc *time.Location) (SeriesResponse, []sample) {
 	t.Helper()
-	const dev = "climate_basement"
+	const dev = "sensor_a"
 	devices := map[string]config.DeviceConfig{
-		dev: {Class: "environmental_sensor", Location: "basement", DisplayName: "Basement"},
+		dev: {Class: "environmental_sensor", Location: "area-a", DisplayName: "Sensor A"},
 	}
 	samples := rampSamples(win.Start, win.Stop)
 	q := &influx.FakeQuerier{
@@ -308,8 +308,8 @@ func TestBuildSeries_HeatingRampLandsInTheRightHour(t *testing.T) {
 		samples = append(samples, sample{At: tm, V: v})
 	}
 
-	const dev = "climate_basement"
-	devices := map[string]config.DeviceConfig{dev: {Class: "environmental_sensor", DisplayName: "Basement"}}
+	const dev = "sensor_a"
+	devices := map[string]config.DeviceConfig{dev: {Class: "environmental_sensor", DisplayName: "Sensor A"}}
 	q := &influx.FakeQuerier{
 		PingOK: true,
 		QueryFunc: func(string) ([]influx.Row, error) {

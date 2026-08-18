@@ -57,14 +57,14 @@ func serveNamespace(mux *http.ServeMux, ns string, v any) {
 func TestFetcher_RefreshPopulatesSnapshot(t *testing.T) {
 	mux := http.NewServeMux()
 	serveNamespace(mux, testNamespace, map[string]any{
-		"glowsensorth1": map[string]any{
+		"probe_a": map[string]any{
 			// Legacy Z2M shorthand: normaliseDevices folds these into
 			// scheme=zigbee, primary=ieee_address, display=friendly_name.
 			"ieee_address":  "0xaabbccddeeff0011",
 			"friendly_name": "Glow Sensor",
 			"class":         "environmental_sensor",
-			"display_name":  "Network Cabinet",
-			"location":      "office",
+			"display_name":  "Probe A",
+			"location":      "area-d",
 		},
 	})
 
@@ -72,9 +72,9 @@ func TestFetcher_RefreshPopulatesSnapshot(t *testing.T) {
 	f.Refresh(context.Background())
 
 	devices := f.Devices()
-	d, ok := devices["glowsensorth1"]
+	d, ok := devices["probe_a"]
 	if !ok {
-		t.Fatal("glowsensorth1 missing after refresh")
+		t.Fatal("probe_a missing after refresh")
 	}
 	if d.Class != "environmental_sensor" {
 		t.Errorf("class: got %q, want environmental_sensor", d.Class)
@@ -98,18 +98,18 @@ func TestFetcher_RefreshPopulatesSnapshot(t *testing.T) {
 func TestFetcher_DevicesReturnsCopy(t *testing.T) {
 	mux := http.NewServeMux()
 	serveNamespace(mux, testNamespace, map[string]any{
-		"climate_basement": map[string]any{"class": "environmental_sensor"},
+		"sensor_a": map[string]any{"class": "environmental_sensor"},
 	})
 
 	f := newTestFetcher(t, mux, &staticTokenSource{token: "test-token"})
 	f.Refresh(context.Background())
 
 	got := f.Devices()
-	got["climate_basement"] = DeviceConfig{Class: "mutated"}
+	got["sensor_a"] = DeviceConfig{Class: "mutated"}
 	got["injected"] = DeviceConfig{}
 
 	again := f.Devices()
-	if again["climate_basement"].Class != "environmental_sensor" {
+	if again["sensor_a"].Class != "environmental_sensor" {
 		t.Error("mutating returned map leaked into the held snapshot")
 	}
 	if _, ok := again["injected"]; ok {
@@ -121,7 +121,7 @@ func TestFetcher_401InvalidatesAndKeepsSnapshot(t *testing.T) {
 	// Phase 1: a healthy server populates the snapshot.
 	good := http.NewServeMux()
 	serveNamespace(good, testNamespace, map[string]any{
-		"climate_groundfloor": map[string]any{"class": "environmental_sensor", "display_name": "Ground Floor"},
+		"sensor_b": map[string]any{"class": "environmental_sensor", "display_name": "Sensor B"},
 	})
 	goodSrv := httptest.NewServer(good)
 	defer goodSrv.Close()
@@ -130,8 +130,8 @@ func TestFetcher_401InvalidatesAndKeepsSnapshot(t *testing.T) {
 	f := &Fetcher{BaseURL: goodSrv.URL, DevicesNamespace: testNamespace,
 		Tokens: &staticTokenSource{token: "test-token"}, HTTPClient: goodSrv.Client()}
 	f.Refresh(context.Background())
-	if _, ok := f.Devices()["climate_groundfloor"]; !ok {
-		t.Fatal("precondition: climate_groundfloor should be present after first refresh")
+	if _, ok := f.Devices()["sensor_b"]; !ok {
+		t.Fatal("precondition: sensor_b should be present after first refresh")
 	}
 
 	// Phase 2: point the fetcher at a server that always 401s.
@@ -151,7 +151,7 @@ func TestFetcher_401InvalidatesAndKeepsSnapshot(t *testing.T) {
 		t.Error("expected Invalidate() after 401")
 	}
 	// Fail-open: prior snapshot is retained.
-	if _, ok := f.Devices()["climate_groundfloor"]; !ok {
+	if _, ok := f.Devices()["sensor_b"]; !ok {
 		t.Error("device snapshot was wiped after a 401 (should fail-open)")
 	}
 	if f.Statuses()[testNamespace].OK {
@@ -162,19 +162,19 @@ func TestFetcher_401InvalidatesAndKeepsSnapshot(t *testing.T) {
 func TestFetcher_TokenFailureKeepsSnapshot(t *testing.T) {
 	mux := http.NewServeMux()
 	serveNamespace(mux, testNamespace, map[string]any{
-		"climate_firstfloor": map[string]any{"class": "environmental_sensor"},
+		"sensor_c": map[string]any{"class": "environmental_sensor"},
 	})
 	f := newTestFetcher(t, mux, &staticTokenSource{token: "test-token"})
 	f.Refresh(context.Background())
-	if _, ok := f.Devices()["climate_firstfloor"]; !ok {
-		t.Fatal("precondition: climate_firstfloor present after first refresh")
+	if _, ok := f.Devices()["sensor_c"]; !ok {
+		t.Fatal("precondition: sensor_c present after first refresh")
 	}
 
 	// Swap in a token source that errors.
 	f.Tokens = &errTokenSource{}
 	f.Refresh(context.Background())
 
-	if _, ok := f.Devices()["climate_firstfloor"]; !ok {
+	if _, ok := f.Devices()["sensor_c"]; !ok {
 		t.Error("snapshot wiped after token failure (should fail-open)")
 	}
 	if f.Statuses()[testNamespace].OK {

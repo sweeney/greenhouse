@@ -17,7 +17,7 @@ func TestLegacyHouseLocationIsNotARoom(t *testing.T) {
 }
 
 func TestOrdinaryPlacesAreUnaffected(t *testing.T) {
-	for _, d := range []DeviceConfig{{Location: "kitchen"}, {Room: "groundfloor.kitchen"}} {
+	for _, d := range []DeviceConfig{{Location: "area-e"}, {Room: "floor2.room-a"}} {
 		if d.Place() == "" {
 			t.Errorf("%+v: Place() lost the room", d)
 		}
