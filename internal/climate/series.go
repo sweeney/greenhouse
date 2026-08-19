@@ -669,7 +669,6 @@ func BuildSeries(
 	}, nil
 }
 
-// resolveGroupBy normalises the reported group_by (empty → device).
 // echoGroupFn reports the member combine to echo in the response: the resolved
 // group_fn when the grouping actually combines members, and empty otherwise so
 // the field is omitted rather than advertising a combine that never ran.
@@ -683,6 +682,7 @@ func echoGroupFn(groupBy, groupFn string) string {
 	return groupFn
 }
 
+// resolveGroupBy normalises the reported group_by (empty → device).
 func resolveGroupBy(groupBy string) string {
 	if groupBy == "" {
 		return GroupByDevice

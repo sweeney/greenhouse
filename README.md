@@ -79,7 +79,10 @@ requires a Bearer JWT (user **or** service token).
 - `group_fn` — how a group's **members** are combined: `mean` (default) \| `min`
   \| `max`. Applied *after* `fn` (see below). `last` → 400 (not a spatial
   statistic); `sum` → 400 (non-additive); supplying it with `group_by=device` →
-  400, because that grouping combines nothing.
+  400, because that grouping combines nothing. `/devices/{id}/series` rejects it
+  for the same reason — it always groups by device. (`group_by` itself and the
+  `devices`/`rooms`/`floors` selectors *are* ignored there: the path segment has
+  already selected, so those are redundant rather than impossible.)
 - `devices` — (`/series` only) CSV of device ids to chart, e.g.
   `devices=sensor_b,sensor_c`. Restricts the series to those
   sensors (omit for all climate devices). An unknown or non-climate id → 400.
@@ -147,7 +150,7 @@ be stale — if a sensor starts reporting a new field before the namespace catch
 up, greenhouse must not turn that oversight into a data outage. It only ever
 narrows on a positive declaration.
 
-## Rooms
+## Aggregation
 
 ### Two aggregation axes: `fn` then `group_fn`
 
@@ -220,6 +223,8 @@ sensor, so it is refused on the same grounds:
 Proper vector averaging (the mean of unit vectors) would let both the
 multi-member case and the summary be answered honestly. Until it lands,
 greenhouse refuses rather than emitting a confident-but-wrong bearing.
+
+## Rooms and floors
 
 `location` used to mean two different things across these services — a geographic site
 and a room — so rooms are now `room`, sites are `site`, and floors are `floor`. Room ids

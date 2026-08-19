@@ -487,6 +487,17 @@ func (s *Server) handleDeviceSeries(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid 'shape' (want columns or rows)")
 		return
 	}
+	// This endpoint always groups by device — it promises exactly one series for
+	// a named device — so group_fn is rejected here exactly as it is on
+	// /series?group_by=device. It is NOT ignored the way devices=/rooms=/floors=
+	// are: those SELECT, and the path segment has already selected, so repeating
+	// them is redundancy. group_fn selects nothing; it asks for an aggregation
+	// that cannot occur, which is a client bug held more strongly here than on
+	// /series. The two endpoints must answer the same mistake the same way, or
+	// moving between them silently turns a 400 into a no-op.
+	if _, ok := s.resolveGroupFn(w, r, climate.GroupByDevice); !ok {
+		return
+	}
 	field, fn, ok := s.resolveFieldFn(w, r)
 	if !ok {
 		return
@@ -507,9 +518,6 @@ func (s *Server) handleDeviceSeries(w http.ResponseWriter, r *http.Request) {
 	}
 
 	single := map[string]config.DeviceConfig{id: dev}
-	// group_by and group_fn are not parameters of this endpoint: it promises
-	// exactly one series for a named device, so there is nothing to group and
-	// nothing to combine. Both are ignored here, as devices=/rooms=/floors= are.
 	resp, err := s.buildSeries(r, win, iv, field, fn, climate.GroupByDevice, climate.DefaultGroupFn, single)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "influx query failed: "+err.Error())

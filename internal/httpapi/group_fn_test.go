@@ -354,12 +354,59 @@ func TestSeries_GroupFn_CircularRejectedForEveryCombine(t *testing.T) {
 	}
 }
 
-// The single-device endpoint promises one series, so it groups nothing. group_fn
-// there is ignored rather than 400ing, matching how it ignores devices=/rooms=/
-// floors=/group_by.
-func TestDeviceSeries_IgnoresGroupFn(t *testing.T) {
+// The single-device endpoint promises exactly one series, so it groups nothing
+// and group_fn asks for an aggregation that cannot occur. It is REJECTED here,
+// exactly as on /series?group_by=device.
+//
+// Not ignored the way devices=/rooms=/floors= are: those SELECT, and the path
+// segment has already selected, so repeating them is redundancy. group_fn
+// selects nothing. If the two endpoints answered this differently, a client
+// migrating from /series?devices=sensor_e to /devices/sensor_e/series — which
+// the docs present as interchangeable — would have a 400 silently become a
+// no-op.
+func TestDeviceSeries_RejectsGroupFn(t *testing.T) {
 	s, _ := groupSetup(t)
 	w := doGET(t, s, "/devices/sensor_e/series?window=today&interval=1h&group_fn=max")
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("want 400, got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "group_fn") {
+		t.Errorf("error should name the parameter, got %s", w.Body.String())
+	}
+}
+
+// The two endpoints answer the identical mistake identically. Pinned as a pair,
+// because the failure this guards against is exactly the two drifting apart.
+func TestGroupFn_BothEndpointsRejectItTheSameWay(t *testing.T) {
+	s, _ := groupSetup(t)
+
+	single := doGET(t, s, "/devices/sensor_e/series?window=today&interval=1h&group_fn=max")
+	multi := groupGET(t, s, "group_by=device&group_fn=max&devices=sensor_e")
+
+	if single.Code != multi.Code {
+		t.Errorf("/devices/{id}/series returned %d but /series?group_by=device returned %d "+
+			"for the same request; the docs present these as interchangeable",
+			single.Code, multi.Code)
+	}
+}
+
+// Omitting group_fn leaves the single-device endpoint completely unchanged — the
+// rejection must not become a required parameter by accident.
+func TestDeviceSeries_WithoutGroupFnIsUnaffected(t *testing.T) {
+	s, _ := groupSetup(t)
+	w := doGET(t, s, "/devices/sensor_e/series?window=today&interval=1h")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// group_by is still ignored here: it is not asking for anything the endpoint
+// cannot do, it is naming the grouping the endpoint already uses.
+func TestDeviceSeries_StillIgnoresGroupBy(t *testing.T) {
+	s, _ := groupSetup(t)
+	w := doGET(t, s, "/devices/sensor_e/series?window=today&interval=1h&group_by=room")
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())

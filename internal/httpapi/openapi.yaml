@@ -148,6 +148,12 @@ paths:
         declares environment_fields — this endpoint promises exactly one series,
         so an impossible request is an error rather than an all-null response.
         field/fn/shape otherwise behave as on /series.
+
+        This endpoint always groups by device, so `group_fn` returns 400 here
+        exactly as it does on /series?group_by=device — it asks for an
+        aggregation that cannot occur. (`group_by` itself, and the
+        devices=/rooms=/floors= selectors, are simply ignored: the path segment
+        has already selected, so those are redundant rather than impossible.)
       operationId: getDeviceSeries
       tags: [data]
       parameters:
@@ -376,7 +382,8 @@ components:
         would mean "whichever sensor reported most recently", which is not a
         spatial statistic, so it returns 400. Supplying group_fn with
         group_by=device also returns 400 — that grouping combines nothing, so the
-        parameter would silently do nothing.
+        parameter would silently do nothing. /devices/{id}/series rejects it for
+        the same reason: it always groups by device.
       schema:
         type: string
         enum: [mean, min, max]
@@ -517,12 +524,16 @@ components:
       properties:
         key:
           type: string
-          description: Series identity (device id or room id).
+          description: >
+            Series identity: a device id, room id or floor id, per group_by.
         label:
           type: string
         room:
           type: string
-          description: Floorplan room id.
+          description: >
+            Floorplan room id. Present for group_by=device and group_by=room;
+            ABSENT under group_by=floor — a floor is not a room, and a floor id
+            in a field named room would be worse than no field at all.
         values:
           type: array
           items:
@@ -616,12 +627,16 @@ components:
       properties:
         key:
           type: string
-          description: Series identity (device id or room id).
+          description: >
+            Series identity: a device id, room id or floor id, per group_by.
         label:
           type: string
         room:
           type: string
-          description: Floorplan room id.
+          description: >
+            Floorplan room id. Present for group_by=device and group_by=room;
+            ABSENT under group_by=floor — a floor is not a room, and a floor id
+            in a field named room would be worse than no field at all.
         min:
           type: number
           nullable: true
@@ -639,7 +654,9 @@ components:
       properties:
         key:
           type: string
-          description: Series identity this row belongs to.
+          description: >
+            Series identity this row belongs to: a device id, room id or floor
+            id, per group_by.
         time:
           type: string
           format: date-time
