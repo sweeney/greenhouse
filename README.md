@@ -71,7 +71,10 @@ requires a Bearer JWT (user **or** service token).
   offered (non-additive). Bad fn → 400. `wind_dir_deg` is **circular** (a 0–360°
   bearing): arithmetic mean/min/max are wrong on an angular axis, so it accepts
   only `last` (and defaults to it); `mean`/`min`/`max` for it → 400.
-- `group_by` — `device` (default) \| `room`. Bad value → 400.
+- `group_by` — `device` (default) \| `room`. Bad value → 400. A **circular**
+  field cannot be combined across a group's members at all, so grouping one by a
+  key whose group holds two or more climate sensors → 400. Use `group_by=device`,
+  or narrow with `devices=`/`rooms=` until each group holds one sensor.
 - `devices` — (`/series` only) CSV of device ids to chart, e.g.
   `devices=sensor_b,sensor_c`. Restricts the series to those
   sensors (omit for all climate devices). An unknown or non-climate id → 400.
@@ -140,6 +143,32 @@ up, greenhouse must not turn that oversight into a data outage. It only ever
 narrows on a positive declaration.
 
 ## Rooms
+
+### Circular fields are never combined
+
+`wind_dir_deg` is a 0–360° bearing, and the arithmetic that is merely
+*non-additive* for a temperature is outright **invalid** for an angle:
+`mean(350°, 10°)` is `180°` — due South — though both readings say North.
+
+`fn=` has always refused `mean`/`min`/`max` for such a field. The **cross-member
+combine** applies exactly that arithmetic when a group holds more than one
+sensor, so it is refused on the same grounds:
+
+- Grouping a circular field where any group holds 2+ climate sensors → **400**,
+  naming the field, the group and the way out. Said up front rather than served
+  as gaps: `null` means "no reading", so a silently-gapped series would be
+  indistinguishable from a sensor outage.
+- A group with exactly **one** reporting member passes that bearing through
+  unchanged — a single instantaneous bearing is always valid. This is why
+  `group_by=device` is always answerable.
+- `min`/`max`/`mean` are **null** for a circular series. They are linear
+  statistics: a legend reading "min 10°, max 350°" describes a 20° spread as
+  though it were 340°. The `values` themselves are still served — refusing to
+  summarise is not refusing to chart.
+
+Proper vector averaging (the mean of unit vectors) would let both the
+multi-member case and the summary be answered honestly. Until it lands,
+greenhouse refuses rather than emitting a confident-but-wrong bearing.
 
 `location` used to mean two different things across these services — a geographic site
 and a room — so rooms are now `room`, sites are `site`, and floors are `floor`. Room ids
