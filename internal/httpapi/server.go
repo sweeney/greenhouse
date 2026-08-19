@@ -83,6 +83,12 @@ type Server struct {
 	SiteID           string
 	DevicesNamespace string
 
+	// FloorplanNamespace is the optional floorplan namespace, reported on
+	// /healthz so an operator can tell "not configured" from "configured but not
+	// yet fetched" without reading the host's config file. Empty on the instances
+	// that do not set one, which is not a fault.
+	FloorplanNamespace string
+
 	// Bucket is the Influx bucket the data handlers query (e.g. "statehouse").
 	// main.go sets it from config.
 	Bucket string
@@ -222,6 +228,14 @@ func (s *Server) Start(ctx context.Context) error {
 type siteHealth struct {
 	ID               string `json:"id,omitempty"`
 	DevicesNamespace string `json:"devices_namespace,omitempty"`
+	// FloorplanNamespace is reported for the same reason, and answers a question
+	// the remote_config block cannot: that block distinguishes "configured and
+	// failing" from "configured and fine" only AFTER a fetch attempt, so an
+	// operator seeing blank floor names cannot otherwise tell "no floorplan
+	// namespace configured" from "configured, first fetch hasn't landed" without
+	// reading the host's config file. omitempty keeps it invisible on the
+	// instances that do not set it.
+	FloorplanNamespace string `json:"floorplan_namespace,omitempty"`
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -242,8 +256,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		authStatus = "disabled"
 	}
 	var site *siteHealth
-	if s.SiteID != "" || s.DevicesNamespace != "" {
-		site = &siteHealth{ID: s.SiteID, DevicesNamespace: s.DevicesNamespace}
+	if s.SiteID != "" || s.DevicesNamespace != "" || s.FloorplanNamespace != "" {
+		site = &siteHealth{
+			ID:                 s.SiteID,
+			DevicesNamespace:   s.DevicesNamespace,
+			FloorplanNamespace: s.FloorplanNamespace,
+		}
 	}
 	h := health{
 		Site:       site,

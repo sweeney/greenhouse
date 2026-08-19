@@ -32,7 +32,7 @@ requires a Bearer JWT (user **or** service token).
 
 | Route | Returns |
 |---|---|
-| `GET /healthz` | status, version, uptime, influx_reachable, remote_config status |
+| `GET /healthz` | status, version, uptime, influx_reachable, resolved site (incl. namespaces), remote_config status |
 | `GET /openapi.json` | the OpenAPI spec as JSON |
 | `GET /devices` | climate device catalog: id, display_name, room, floor, class, and an `environment_fields` hint |
 | `GET /floors` | floor catalog: id, name, order, elevation, device_count — the vocabulary `floors=` accepts |
@@ -219,6 +219,11 @@ floor's label and storey order are presentation detail. Unset, `/floors` still l
 floor that holds a climate sensor — with `name` and `order` reported as unknown — and a
 fetch failure is fail-open and never touches the devices snapshot. A missing floorplan can
 degrade the labels; it can never stop a climate service serving climate.
+
+`/healthz`'s `site` block reports it alongside `devices_namespace` (omitted when unset),
+so an operator seeing blank floor names can tell "no floorplan namespace configured" from
+"configured, first fetch hasn't landed" — a distinction `remote_config` only makes after a
+fetch has been attempted.
 
 
 Local YAML (`/etc/greenhouse/config.yaml`, see `config/config.example.yaml`):

@@ -212,8 +212,8 @@ paths:
       description: >
         The floors that hold at least one climate sensor, each with the name,
         storey order and elevation the floorplan namespace declares. This is the
-        discoverable vocabulary behind the `floors=` filter and `group_by=floor`,
-        the same relationship /fields has to `field=`.
+        discoverable vocabulary behind the `floors=` filter, the same
+        relationship /fields has to `field=`.
 
         WHICH floors appear is exactly the set `floors=` accepts: a floor no
         climate device declares is not listed, because /series would reject it —
@@ -725,9 +725,8 @@ components:
         id:
           type: string
           description: >
-            The floor id. Pass it back as `floors=` or chart it with
-            `group_by=floor`; it is the value devices carry in their `floor`
-            property.
+            The floor id. Pass it back as `floors=`; it is the value devices
+            carry in their `floor` property.
         name:
           type: string
           description: >
@@ -810,12 +809,21 @@ components:
             devices_namespace:
               type: string
               example: devices_home
+            floorplan_namespace:
+              type: string
+              example: floorplan_home
+              description: >
+                The optional floorplan namespace, absent when none is configured.
+                Reported so an operator seeing blank floor names on /floors can
+                tell "not configured" from "configured but not yet fetched" —
+                remote_config distinguishes those only after a fetch attempt.
         remote_config:
           type: object
           description: >-
             Per-namespace status of the most recent remote-config fetch, keyed by
-            the namespace actually read. That key is whatever site.devices_namespace
-            names (e.g. `devices_home`); it is required and has no default, so the
+            the namespaces actually read: whatever site.devices_namespace names
+            (e.g. `devices_home`), plus site.floorplan_namespace when one is
+            configured. devices_namespace is required and has no default, so the
             key varies per site and per property. A monitor keyed on a literal
             namespace stops matching when a site migrates, and a missing key reads
             as healthy in most check expressions. Alert on the top-level `status`
