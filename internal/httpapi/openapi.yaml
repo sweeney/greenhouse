@@ -115,6 +115,7 @@ paths:
         - $ref: "#/components/parameters/Field"
         - $ref: "#/components/parameters/Fn"
         - $ref: "#/components/parameters/GroupBy"
+        - $ref: "#/components/parameters/GroupFn"
         - $ref: "#/components/parameters/Devices"
         - $ref: "#/components/parameters/Rooms"
         - $ref: "#/components/parameters/Floors"
@@ -147,6 +148,12 @@ paths:
         declares environment_fields — this endpoint promises exactly one series,
         so an impossible request is an error rather than an all-null response.
         field/fn/shape otherwise behave as on /series.
+
+        This endpoint always groups by device, so `group_fn` returns 400 here
+        exactly as it does on /series?group_by=device — it asks for an
+        aggregation that cannot occur. (`group_by` itself, and the
+        devices=/rooms=/floors= selectors, are simply ignored: the path segment
+        has already selected, so those are redundant rather than impossible.)
       operationId: getDeviceSeries
       tags: [data]
       parameters:
@@ -329,8 +336,14 @@ components:
       required: false
       description: >
         How to group series. "device" (default) yields one series per climate
-        sensor. "room" combines a room's sensors with the MEAN of their readings
-        (never a sum).
+        sensor and combines nothing. "room" combines a room's sensors, "floor"
+        combines every sensor DECLARING that floor (across its rooms) — both per
+        `group_fn`, and never a sum.
+
+        A device declaring no room (for "room") or no floor (for "floor") has
+        UNKNOWN membership and is OMITTED rather than keyed on "": an empty or
+        invented key would be a value that rooms=/floors= reject. Chart it with
+        group_by=device.
 
         A circular field (wind_dir_deg) cannot be combined across members at
         all — mean(350°, 10°) is 180°, due South, though both readings say
@@ -342,8 +355,39 @@ components:
 
       schema:
         type: string
-        enum: [device, room]
+        enum: [device, room, floor]
         default: device
+    GroupFn:
+      name: group_fn
+      in: query
+      required: false
+      description: >
+        How a group's MEMBERS are combined into one series, once `fn` has already
+        collapsed each device's samples within a bucket. Defaults to mean, which
+        is what greenhouse always did, so omitting it is unchanged behaviour.
+
+        The two axes are independent and DO NOT COMMUTE. `fn` is applied FIRST,
+        inside Influx, per device; `group_fn` is applied SECOND, across the
+        group's devices. So fn=mean&group_fn=max is "the warmest member's bucket
+        average" and fn=max&group_fn=mean is "the mean of each member's peak" —
+        both legitimate, and different numbers.
+
+        min/max make a group's spread visible instead of averaging it away: a
+        floor charted as min, mean and max renders as a band whose WIDTH is the
+        difference between its warmest and coldest room. Non-reporting members are
+        skipped for every combine exactly as they are for the mean, and a bucket
+        nobody reported stays null rather than becoming a zero.
+
+        There is no sum (climate is non-additive) and no last: across members that
+        would mean "whichever sensor reported most recently", which is not a
+        spatial statistic, so it returns 400. Supplying group_fn with
+        group_by=device also returns 400 — that grouping combines nothing, so the
+        parameter would silently do nothing. /devices/{id}/series rejects it for
+        the same reason: it always groups by device.
+      schema:
+        type: string
+        enum: [mean, min, max]
+        default: mean
     Devices:
       name: devices
       in: query
@@ -480,12 +524,16 @@ components:
       properties:
         key:
           type: string
-          description: Series identity (device id or room id).
+          description: >
+            Series identity: a device id, room id or floor id, per group_by.
         label:
           type: string
         room:
           type: string
-          description: Floorplan room id.
+          description: >
+            Floorplan room id. Present for group_by=device and group_by=room;
+            ABSENT under group_by=floor — a floor is not a room, and a floor id
+            in a field named room would be worse than no field at all.
         values:
           type: array
           items:
@@ -535,7 +583,7 @@ components:
           enum: [5m, 15m, 30m, 1h, 6h, 1d]
         group_by:
           type: string
-          enum: [device, room]
+          enum: [device, room, floor]
         field:
           type: string
         unit:
@@ -543,6 +591,13 @@ components:
         fn:
           type: string
           enum: [mean, min, max, last]
+        group_fn:
+          type: string
+          enum: [mean, min, max]
+          description: >
+            The member combine that was applied, echoed so a caller can see which
+            question was answered rather than assuming the default. Omitted when
+            the grouping combines nothing (group_by=device).
         shape:
           type: string
           enum: [columns]
@@ -572,12 +627,16 @@ components:
       properties:
         key:
           type: string
-          description: Series identity (device id or room id).
+          description: >
+            Series identity: a device id, room id or floor id, per group_by.
         label:
           type: string
         room:
           type: string
-          description: Floorplan room id.
+          description: >
+            Floorplan room id. Present for group_by=device and group_by=room;
+            ABSENT under group_by=floor — a floor is not a room, and a floor id
+            in a field named room would be worse than no field at all.
         min:
           type: number
           nullable: true
@@ -595,7 +654,9 @@ components:
       properties:
         key:
           type: string
-          description: Series identity this row belongs to.
+          description: >
+            Series identity this row belongs to: a device id, room id or floor
+            id, per group_by.
         time:
           type: string
           format: date-time
@@ -626,7 +687,7 @@ components:
           enum: [5m, 15m, 30m, 1h, 6h, 1d]
         group_by:
           type: string
-          enum: [device, room]
+          enum: [device, room, floor]
         field:
           type: string
         unit:
@@ -634,6 +695,13 @@ components:
         fn:
           type: string
           enum: [mean, min, max, last]
+        group_fn:
+          type: string
+          enum: [mean, min, max]
+          description: >
+            The member combine that was applied, echoed so a caller can see which
+            question was answered rather than assuming the default. Omitted when
+            the grouping combines nothing (group_by=device).
         shape:
           type: string
           enum: [rows]

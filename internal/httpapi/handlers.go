@@ -291,11 +291,55 @@ func toSet(items []string) map[string]struct{} {
 // validGroupBy reports whether g is an accepted group_by mode.
 func validGroupBy(g string) bool {
 	switch g {
-	case climate.GroupByDevice, climate.GroupByRoom:
+	case climate.GroupByDevice, climate.GroupByRoom, climate.GroupByFloor:
 		return true
 	default:
 		return false
 	}
+}
+
+// resolveGroupFn parses and validates group_fn: how a group's MEMBERS are
+// combined once fn= has collapsed each device's samples within a bucket. It
+// writes a 400 (and returns ok=false) when:
+//
+//   - group_fn is not one of mean/min/max. `last` is called out by name because
+//     it is the plausible-looking mistake: it is valid for fn=, but across
+//     members it would mean "whichever sensor reported most recently", which is
+//     not a spatial statistic;
+//   - group_fn is given alongside a grouping that combines nothing
+//     (group_by=device). That request is the identity case, and a caller who
+//     wrote it believes an aggregation is happening that is not. Failing loudly
+//     matches the house style and catches a real client bug.
+//
+// Omitting group_fn resolves to climate.DefaultGroupFn (mean), which is what
+// greenhouse always did — so every request that predates this parameter is
+// unchanged.
+func (s *Server) resolveGroupFn(w http.ResponseWriter, r *http.Request, groupBy string) (string, bool) {
+	q := r.URL.Query()
+	if !q.Has("group_fn") {
+		return climate.DefaultGroupFn, true
+	}
+	groupFn := q.Get("group_fn")
+	if !climate.Groups(groupBy) {
+		writeError(w, http.StatusBadRequest,
+			"'group_fn' combines a group's members, but group_by="+groupBy+
+				" gives every device its own series; drop 'group_fn' or group by "+
+				climate.GroupByRoom+"/"+climate.GroupByFloor)
+		return "", false
+	}
+	if groupFn == "last" {
+		writeError(w, http.StatusBadRequest,
+			"invalid 'group_fn': 'last' is valid for 'fn' but not across a group's "+
+				"members, where it would mean 'whichever sensor reported most recently' "+
+				"— not a spatial statistic (want one of "+strings.Join(climate.GroupFns(), ", ")+")")
+		return "", false
+	}
+	if !climate.ValidGroupFn(groupFn) {
+		writeError(w, http.StatusBadRequest,
+			"invalid 'group_fn' (want one of "+strings.Join(climate.GroupFns(), ", ")+")")
+		return "", false
+	}
+	return groupFn, true
 }
 
 // catalogEntry is one row in the /devices catalog.
@@ -365,7 +409,11 @@ func (s *Server) handleSeries(w http.ResponseWriter, r *http.Request) {
 		groupBy = climate.GroupByDevice
 	}
 	if !validGroupBy(groupBy) {
-		writeError(w, http.StatusBadRequest, "invalid 'group_by' (want one of device, room)")
+		writeError(w, http.StatusBadRequest, "invalid 'group_by' (want one of device, room, floor)")
+		return
+	}
+	groupFn, ok := s.resolveGroupFn(w, r, groupBy)
+	if !ok {
 		return
 	}
 	shape := r.URL.Query().Get("shape")
@@ -412,7 +460,7 @@ func (s *Server) handleSeries(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := s.buildSeries(r, win, iv, field, fn, groupBy, devices)
+	resp, err := s.buildSeries(r, win, iv, field, fn, groupBy, groupFn, devices)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "influx query failed: "+err.Error())
 		return
@@ -439,6 +487,17 @@ func (s *Server) handleDeviceSeries(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid 'shape' (want columns or rows)")
 		return
 	}
+	// This endpoint always groups by device — it promises exactly one series for
+	// a named device — so group_fn is rejected here exactly as it is on
+	// /series?group_by=device. It is NOT ignored the way devices=/rooms=/floors=
+	// are: those SELECT, and the path segment has already selected, so repeating
+	// them is redundancy. group_fn selects nothing; it asks for an aggregation
+	// that cannot occur, which is a client bug held more strongly here than on
+	// /series. The two endpoints must answer the same mistake the same way, or
+	// moving between them silently turns a 400 into a no-op.
+	if _, ok := s.resolveGroupFn(w, r, climate.GroupByDevice); !ok {
+		return
+	}
 	field, fn, ok := s.resolveFieldFn(w, r)
 	if !ok {
 		return
@@ -459,7 +518,7 @@ func (s *Server) handleDeviceSeries(w http.ResponseWriter, r *http.Request) {
 	}
 
 	single := map[string]config.DeviceConfig{id: dev}
-	resp, err := s.buildSeries(r, win, iv, field, fn, climate.GroupByDevice, single)
+	resp, err := s.buildSeries(r, win, iv, field, fn, climate.GroupByDevice, climate.DefaultGroupFn, single)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, "influx query failed: "+err.Error())
 		return
@@ -468,8 +527,8 @@ func (s *Server) handleDeviceSeries(w http.ResponseWriter, r *http.Request) {
 }
 
 // buildSeries runs climate.BuildSeries.
-func (s *Server) buildSeries(r *http.Request, win climate.Window, iv climate.Interval, field, fn, groupBy string, devices map[string]config.DeviceConfig) (climate.SeriesResponse, error) {
-	return climate.BuildSeries(r.Context(), s.Influx, s.Bucket, win, iv, field, fn, groupBy, devices, s.loc())
+func (s *Server) buildSeries(r *http.Request, win climate.Window, iv climate.Interval, field, fn, groupBy, groupFn string, devices map[string]config.DeviceConfig) (climate.SeriesResponse, error) {
+	return climate.BuildSeries(r.Context(), s.Influx, s.Bucket, win, iv, field, fn, groupBy, groupFn, devices, s.loc())
 }
 
 // writeSeriesShaped writes a series response in the requested shape: the columnar

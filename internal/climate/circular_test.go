@@ -53,7 +53,7 @@ func TestAssembleSeries_Circular_TwoMembersIsAGapNotDueSouth(t *testing.T) {
 	got := AssembleSeries(twoBucketAxis(), oneRoomTwoSensors(), map[string][]float64{
 		"probe_a": {350, 350},
 		"probe_b": {10, 10},
-	}, GroupByRoom, circularField)
+	}, GroupByRoom, circularField, DefaultGroupFn)
 
 	room, ok := seriesByKey(got)["floor1.room-a"]
 	if !ok {
@@ -78,7 +78,7 @@ func TestAssembleSeries_Circular_TwoAgreeingMembersStillGap(t *testing.T) {
 	got := AssembleSeries(twoBucketAxis(), oneRoomTwoSensors(), map[string][]float64{
 		"probe_a": {90, 90},
 		"probe_b": {90, 90},
-	}, GroupByRoom, circularField)
+	}, GroupByRoom, circularField, DefaultGroupFn)
 
 	room := seriesByKey(got)["floor1.room-a"]
 	if !math.IsNaN(room.Values[0]) {
@@ -94,7 +94,7 @@ func TestAssembleSeries_Circular_SingleMemberPassesThrough(t *testing.T) {
 	got := AssembleSeries(twoBucketAxis(), oneRoomTwoSensors(), map[string][]float64{
 		"probe_a": {350, 10},
 		// probe_b reports nothing at all.
-	}, GroupByRoom, circularField)
+	}, GroupByRoom, circularField, DefaultGroupFn)
 
 	room := seriesByKey(got)["floor1.room-a"]
 	if room.Values[0] != 350 || room.Values[1] != 10 {
@@ -109,7 +109,7 @@ func TestAssembleSeries_Circular_RefusalIsPerBucket(t *testing.T) {
 	got := AssembleSeries(twoBucketAxis(), oneRoomTwoSensors(), map[string][]float64{
 		"probe_a": {350, 350},
 		"probe_b": {math.NaN(), 10}, // offline for bucket 0, reporting in bucket 1
-	}, GroupByRoom, circularField)
+	}, GroupByRoom, circularField, DefaultGroupFn)
 
 	room := seriesByKey(got)["floor1.room-a"]
 	if room.Values[0] != 350 {
@@ -127,7 +127,7 @@ func TestAssembleSeries_Circular_RefusalIsPerBucket(t *testing.T) {
 func TestAssembleSeries_Circular_NoMembersIsStillAGap(t *testing.T) {
 	got := AssembleSeries(twoBucketAxis(), oneRoomTwoSensors(), map[string][]float64{
 		"probe_a": {math.NaN(), 10},
-	}, GroupByRoom, circularField)
+	}, GroupByRoom, circularField, DefaultGroupFn)
 
 	room := seriesByKey(got)["floor1.room-a"]
 	if !math.IsNaN(room.Values[0]) {
@@ -141,7 +141,7 @@ func TestAssembleSeries_Circular_ByDeviceIsUnaffected(t *testing.T) {
 	got := AssembleSeries(twoBucketAxis(), oneRoomTwoSensors(), map[string][]float64{
 		"probe_a": {350, 350},
 		"probe_b": {10, 10},
-	}, GroupByDevice, circularField)
+	}, GroupByDevice, circularField, DefaultGroupFn)
 
 	byKey := seriesByKey(got)
 	if v := byKey["probe_a"].Values; v[0] != 350 || v[1] != 350 {
@@ -158,7 +158,7 @@ func TestAssembleSeries_Circular_ByDeviceIsUnaffected(t *testing.T) {
 func TestAssembleSeries_Circular_SummaryStatsAreNull(t *testing.T) {
 	got := AssembleSeries(twoBucketAxis(), oneRoomTwoSensors(), map[string][]float64{
 		"probe_a": {350, 10},
-	}, GroupByDevice, circularField)
+	}, GroupByDevice, circularField, DefaultGroupFn)
 
 	s := seriesByKey(got)["probe_a"]
 	for name, v := range map[string]float64{"Min": s.Min, "Max": s.Max, "Mean": s.Mean} {
@@ -179,7 +179,7 @@ func TestAssembleSeries_Linear_StillMeansAcrossMembers(t *testing.T) {
 	got := AssembleSeries(twoBucketAxis(), oneRoomTwoSensors(), map[string][]float64{
 		"probe_a": {20, 20},
 		"probe_b": {22, 24},
-	}, GroupByRoom, DefaultField)
+	}, GroupByRoom, DefaultField, DefaultGroupFn)
 
 	room := seriesByKey(got)["floor1.room-a"]
 	if room.Values[0] != 21 || room.Values[1] != 22 {
@@ -199,7 +199,7 @@ func TestAssembleSeries_UnknownFieldTreatedAsLinear(t *testing.T) {
 	got := AssembleSeries(twoBucketAxis(), oneRoomTwoSensors(), map[string][]float64{
 		"probe_a": {20, 20},
 		"probe_b": {22, 24},
-	}, GroupByRoom, "not_a_registered_field")
+	}, GroupByRoom, "not_a_registered_field", DefaultGroupFn)
 
 	room := seriesByKey(got)["floor1.room-a"]
 	if room.Values[0] != 21 {
