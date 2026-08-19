@@ -17,7 +17,61 @@ const (
 	GroupByDevice = "device"
 	// GroupByRoom groups by floorplan room id.
 	GroupByRoom = "room"
+	// GroupByFloor groups by the floor a device DECLARES (config.DeviceConfig.Floor),
+	// never one derived from the room id. It is the coarse sibling of GroupByRoom,
+	// and like it combines its members with the caller's GroupFn.
+	GroupByFloor = "floor"
 )
+
+// group_fn modes: how a group's MEMBERS are combined into one series, once fn=
+// has already collapsed each device's samples within a bucket.
+//
+// The two axes are independent and DO NOT COMMUTE. fn runs first, inside Influx
+// (aggregateWindow, per device); group_fn runs second, here in Go (across the
+// group's devices). So fn=mean&group_fn=max is "the warmest member's bucket
+// average" and fn=max&group_fn=mean is "the mean of each member's peak" — both
+// legitimate, and different numbers.
+//
+// There is no sum: climate is non-additive. There is no last either — "whichever
+// sensor reported most recently" is not a spatial statistic, so it is rejected
+// rather than answered arbitrarily.
+const (
+	GroupFnMean = "mean"
+	GroupFnMin  = "min"
+	GroupFnMax  = "max"
+)
+
+// DefaultGroupFn is the member combine applied when the caller omits group_fn.
+// Mean is what greenhouse always did, so omitting group_fn is unchanged behaviour.
+const DefaultGroupFn = GroupFnMean
+
+// groupFns is the set of accepted group_fn values.
+var groupFns = map[string]struct{}{
+	GroupFnMean: {},
+	GroupFnMin:  {},
+	GroupFnMax:  {},
+}
+
+// ValidGroupFn reports whether g is an accepted member combine. The empty string
+// is NOT valid; callers default to DefaultGroupFn before validating.
+func ValidGroupFn(g string) bool {
+	_, ok := groupFns[g]
+	return ok
+}
+
+// GroupFns returns the accepted member combines, sorted for stable output.
+func GroupFns() []string {
+	out := make([]string, 0, len(groupFns))
+	for g := range groupFns {
+		out = append(out, g)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// Groups reports whether groupBy combines multiple devices into one series.
+// group_by=device gives each device its own line, so it never does.
+func Groups(groupBy string) bool { return GroupKeyFor(groupBy) != nil }
 
 // ValueDP is the decimal precision climate values are rounded to at the response
 // boundary. Two places is plenty for °C/%/hPa/m/s/lux/index gauges and keeps
@@ -92,17 +146,21 @@ func nullable(v float64) *float64 {
 // maps directly onto web charting libraries (one array per dataset) and is the
 // default. For the row-oriented ("tidy"/long) alternative, see Rows().
 type SeriesResponse struct {
-	Window   string      `json:"window"`
-	From     string      `json:"from"`
-	To       string      `json:"to"`
-	Interval string      `json:"interval"`
-	GroupBy  string      `json:"group_by"`
-	Field    string      `json:"field"`
-	Unit     string      `json:"unit"`
-	Fn       string      `json:"fn"`
-	Shape    string      `json:"shape"` // "columns"
-	Buckets  []time.Time `json:"buckets"`
-	Series   []Series    `json:"series"`
+	Window   string `json:"window"`
+	From     string `json:"from"`
+	To       string `json:"to"`
+	Interval string `json:"interval"`
+	GroupBy  string `json:"group_by"`
+	Field    string `json:"field"`
+	Unit     string `json:"unit"`
+	Fn       string `json:"fn"`
+	// GroupFn is the member combine that was applied, echoed so a caller can see
+	// which question was answered rather than assuming the default. Omitted when
+	// the grouping combines nothing (group_by=device).
+	GroupFn string      `json:"group_fn,omitempty"`
+	Shape   string      `json:"shape"` // "columns"
+	Buckets []time.Time `json:"buckets"`
+	Series  []Series    `json:"series"`
 }
 
 // fixedAxisStart returns the first canonical bucket start for a FIXED (sub-day)
@@ -217,14 +275,36 @@ func roundTo(x float64, n int) float64 {
 // Grouping rules:
 //   - device (default): one series per environmental device. key=id,
 //     label=DisplayName, location carried through.
-//   - room: members sharing a room are combined with the MEAN of their
-//     per-bucket readings (NON-additive — never a sum). A bucket where no member
-//     reported stays NaN.
+//   - room: members sharing a room are combined per groupFn (NON-additive — never
+//     a sum). A bucket where no member reported stays NaN.
+//   - floor: the same, over the floor each device DECLARES. Devices declaring no
+//     room (room) or no floor (floor) are OMITTED rather than keyed on "" — see
+//     assembleByGroup.
+//
+// groupFn selects the member combine (mean/min/max, defaulting to
+// DefaultGroupFn when empty). It runs AFTER fn, which has already collapsed each
+// device's samples within a bucket inside Influx; the two do not commute. It is
+// irrelevant to group_by=device, which never combines members.
+//
+// field names the measurement being assembled, and is required because the
+// combine is not field-agnostic: a CIRCULAR field (wind direction) cannot be
+// arithmetically averaged across members — mean(350°, 10°) is 180° (South) when
+// both readings say North. For a circular field a bucket with a single reporting
+// member passes that member's bearing through unchanged (one instantaneous
+// bearing is always valid), and a bucket where two or more members reported is a
+// GAP: there is no defensible single bearing, so this function refuses to invent
+// one. The same reason makes the linear Min/Max/Mean summary undefined on a
+// circular axis, so those are NaN for circular fields too.
+//
+// An unknown field name is treated as non-circular — the registry is the
+// authority and callers validate against it before reaching here.
 func AssembleSeries(
 	buckets []time.Time,
 	devices map[string]config.DeviceConfig,
 	valueByDevice map[string][]float64,
 	groupBy string,
+	field string,
+	groupFn string,
 ) []Series {
 	n := len(buckets)
 	get := func(id string) []float64 {
@@ -240,19 +320,28 @@ func AssembleSeries(
 		return out
 	}
 
-	switch groupBy {
-	case GroupByRoom:
-		return assembleByRoom(buckets, devices, get)
-	default: // device and unknown fall back to per-device
-		return assembleByDevice(buckets, devices, get)
+	f, _ := FieldFor(field)
+	circular := f.Circular
+
+	if groupFn == "" {
+		groupFn = DefaultGroupFn
 	}
+	if Groups(groupBy) {
+		return assembleByGroup(buckets, devices, get, circular, groupBy, groupFn)
+	}
+	// device, and any unknown grouping, fall back to per-device.
+	return assembleByDevice(buckets, devices, get, circular)
 }
 
 // assembleByDevice yields one series per environmental device, sorted by id.
+//
+// A per-device series has exactly one member, so the cross-member combine never
+// engages: circular only affects the summary stats here (see buildSeries).
 func assembleByDevice(
 	buckets []time.Time,
 	devices map[string]config.DeviceConfig,
 	get func(string) []float64,
+	circular bool,
 ) []Series {
 	var out []Series
 	for _, id := range sortedDeviceIDs(devices) {
@@ -264,26 +353,111 @@ func assembleByDevice(
 		if label == "" {
 			label = id
 		}
-		out = append(out, buildSeries(id, label, d.Place(), buckets, [][]float64{get(id)}))
+		out = append(out, buildSeries(id, label, d.Place(), buckets, [][]float64{get(id)}, circular, DefaultGroupFn))
 	}
 	return out
 }
 
-// assembleByRoom yields one series per distinct non-empty room over environmental
-// devices, combining member readings with the per-bucket MEAN.
+// GroupKeyFor returns the function mapping a device to its series key under
+// groupBy, or nil when groupBy gives every device its own series (group_by=device)
+// and so never combines members.
 //
-// Climate is non-additive: this is the mean across a room's sensors, never a total.
-func assembleByRoom(
+// One definition of "which devices share a series", used by both the assembly
+// step and the up-front validation in httpapi. Two implementations of that
+// question would drift, and the thing that drifts is which readings get averaged
+// together — a silent, wrong answer rather than a loud one.
+func GroupKeyFor(groupBy string) func(config.DeviceConfig) string {
+	switch groupBy {
+	case GroupByRoom:
+		return config.DeviceConfig.Place
+	case GroupByFloor:
+		// The DECLARED floor, never one read out of the room id's <floor>.<slug>
+		// shape: the floorplan owns that fact (see config.DeviceConfig.Floor).
+		return func(d config.DeviceConfig) string { return d.Floor }
+	default:
+		return nil
+	}
+}
+
+// CircularGroupConflict reports whether groupBy would combine two or more of
+// these devices' readings of field into one series, when field is circular and
+// therefore cannot be combined at all (see buildSeries).
+//
+// It returns the offending group key and its member count, choosing the
+// lowest-sorting key so the error message is deterministic. A non-circular
+// field, a grouping that never combines members, or a grouping whose every group
+// is a singleton all report false.
+//
+// Devices are counted by their DECLARED membership, not by whether they have
+// data in the requested window: a request is rejected for what it asks for, so
+// the same request does not 400 today and 200 tomorrow because a sensor was
+// offline.
+func CircularGroupConflict(field, groupBy string, devices map[string]config.DeviceConfig) (string, int, bool) {
+	f, ok := FieldFor(field)
+	if !ok || !f.Circular {
+		return "", 0, false
+	}
+	keyOf := GroupKeyFor(groupBy)
+	if keyOf == nil {
+		return "", 0, false
+	}
+	counts := map[string]int{}
+	for _, d := range devices {
+		if !d.ReportsEnvironment() {
+			continue
+		}
+		if k := keyOf(d); k != "" {
+			counts[k]++
+		}
+	}
+	worst, n := "", 0
+	for k, c := range counts {
+		if c < 2 {
+			continue
+		}
+		if worst == "" || k < worst {
+			worst, n = k, c
+		}
+	}
+	return worst, n, worst != ""
+}
+
+// assembleByGroup yields one series per distinct non-empty group key (room or
+// floor) over environmental devices, combining member readings per groupFn.
+//
+// Climate is non-additive: the combine is mean/min/max across the group's
+// sensors, never a total.
+//
+// UNKNOWN membership is OMITTED, and this is deliberate rather than inherited.
+// A device declaring no room (group_by=room) or no floor (group_by=floor) has an
+// empty key, and greenhouse neither keys a series on "" nor invents an "unknown"
+// bucket for it: "" is not a valid room or floor id, and an invented key would be
+// a value that rooms=/floors= reject, so /series would advertise a vocabulary
+// /series itself refuses. Such a device is charted by group_by=device. The README
+// says so, and TestSeries_FloorsFilter_GroupByRoomOmitsARoomlessDevice pins it.
+//
+// For a circular field the combine is not merely non-additive but undefined, so a
+// bucket with two or more reporting members becomes a gap rather than a bearing
+// nobody measured — see buildSeries. handleSeries rejects such a request up
+// front so the API answers with an error instead of unexplained gaps; this is
+// the library-level guarantee behind that check.
+func assembleByGroup(
 	buckets []time.Time,
 	devices map[string]config.DeviceConfig,
 	get func(string) []float64,
+	circular bool,
+	groupBy, groupFn string,
 ) []Series {
+	keyOf := GroupKeyFor(groupBy)
+	if keyOf == nil {
+		return assembleByDevice(buckets, devices, get, circular)
+	}
 	members := map[string][]string{}
 	for id, d := range devices {
 		if !d.ReportsEnvironment() {
 			continue
 		}
-		place := d.Place()
+		place := keyOf(d)
 		if place == "" {
 			continue
 		}
@@ -304,16 +478,44 @@ func assembleByRoom(
 		for _, id := range ids {
 			memberValues = append(memberValues, get(id))
 		}
-		s := buildSeries(k, k, k, buckets, memberValues)
-		out = append(out, s)
+		// A grouped series belongs to no single room, so Room is left empty for
+		// floor grouping rather than carrying a floor id in a field named room.
+		room := ""
+		if groupBy == GroupByRoom {
+			room = k
+		}
+		out = append(out, buildSeries(k, k, room, buckets, memberValues, circular, groupFn))
 	}
 	return out
 }
 
-// buildSeries combines member per-bucket slices with the MEAN (ignoring NaN
-// gaps), rounds every value, and computes the window summary stats. All member
-// slices are assumed to be length len(buckets) with NaN for gaps.
-func buildSeries(key, label, place string, buckets []time.Time, members [][]float64) Series {
+// buildSeries combines members into one series over the bucket axis, rounding
+// every value and computing the window summary stats. All member slices are
+// assumed to be length len(buckets) with NaN for gaps.
+//
+// Members are combined per groupFn — mean (the default), min or max across the
+// members reporting that bucket. Climate is non-additive, so there is no sum. A
+// bucket no member reported is a NaN gap: min/max skip non-reporting members
+// exactly as the mean does, and a gap never becomes a zero.
+//
+// circular marks an angular 0–360° field, where that arithmetic is invalid:
+// mean(350°, 10°) is 180° (South) though both readings say North. So when
+// circular is set:
+//
+//   - a bucket with exactly ONE reporting member passes that bearing through
+//     unchanged — a single instantaneous bearing is always valid;
+//   - a bucket with TWO OR MORE reporting members is a GAP, because averaging
+//     them would emit a bearing nobody measured. Refusing beats guessing: this
+//     package's contract is that greenhouse never emits a confident-but-wrong
+//     bearing (see Field.Circular and ValidFnForField);
+//   - Min/Max/Mean are NaN (JSON null). They are linear statistics and are
+//     undefined on a circular axis for exactly the same reason, whatever the
+//     member count — a legend reading "min 10°, max 350°" describes a spread of
+//     20° as though it were 340°.
+//
+// Proper vector averaging (mean of unit vectors) would let the multi-member case
+// and the summary both be answered honestly; until it lands, this refuses.
+func buildSeries(key, label, place string, buckets []time.Time, members [][]float64, circular bool, groupFn string) Series {
 	n := len(buckets)
 	s := Series{
 		Key:    key,
@@ -324,19 +526,42 @@ func buildSeries(key, label, place string, buckets []time.Time, members [][]floa
 	min, max, sum := math.Inf(1), math.Inf(-1), 0.0
 	count := 0
 	for i := 0; i < n; i++ {
-		var bsum float64
+		var bsum, bmin, bmax float64
 		var bcount int
 		for _, m := range members {
-			if i < len(m) && !math.IsNaN(m[i]) {
-				bsum += m[i]
-				bcount++
+			if i >= len(m) || math.IsNaN(m[i]) {
+				continue // a member that did not report is skipped, for every groupFn
 			}
+			mv := m[i]
+			if bcount == 0 || mv < bmin {
+				bmin = mv
+			}
+			if bcount == 0 || mv > bmax {
+				bmax = mv
+			}
+			bsum += mv
+			bcount++
 		}
 		if bcount == 0 {
 			s.Values[i] = math.NaN() // gap: no member reported this bucket
 			continue
 		}
-		v := roundTo(bsum/float64(bcount), valueDP)
+		if circular && bcount > 1 {
+			// No defensible single bearing across members; a gap says "we cannot
+			// answer" where an average would say something false with confidence.
+			s.Values[i] = math.NaN()
+			continue
+		}
+		var combined float64
+		switch groupFn {
+		case GroupFnMin:
+			combined = bmin
+		case GroupFnMax:
+			combined = bmax
+		default: // mean, and any unrecognised value (callers pre-validate)
+			combined = bsum / float64(bcount)
+		}
+		v := roundTo(combined, valueDP)
 		s.Values[i] = v
 		if v < min {
 			min = v
@@ -347,7 +572,7 @@ func buildSeries(key, label, place string, buckets []time.Time, members [][]floa
 		sum += v
 		count++
 	}
-	if count == 0 {
+	if circular || count == 0 {
 		s.Min, s.Max, s.Mean = math.NaN(), math.NaN(), math.NaN()
 		return s
 	}
@@ -385,15 +610,20 @@ func environmentalIDs(devices map[string]config.DeviceConfig) []string {
 //
 // bucket is the Influx bucket name; win the resolved window; iv the resolved
 // interval; field+fn the measurement to chart; groupBy the grouping mode;
-// devices the inventory; loc the timezone. field/fn are assumed pre-validated
-// by the caller (FieldFor / ValidFn).
+// groupFn how a group's members are combined; devices the inventory; loc the
+// timezone. field/fn/groupFn are assumed pre-validated by the caller (FieldFor /
+// ValidFnForField / ValidGroupFn).
+//
+// fn and groupFn are applied in that ORDER and do not commute: fn collapses each
+// device's samples within a bucket inside Influx, then groupFn combines the
+// group's devices here in Go.
 func BuildSeries(
 	ctx context.Context,
 	q influx.Querier,
 	bucket string,
 	win Window,
 	iv Interval,
-	field, fn, groupBy string,
+	field, fn, groupBy, groupFn string,
 	devices map[string]config.DeviceConfig,
 	loc *time.Location,
 ) (SeriesResponse, error) {
@@ -416,7 +646,7 @@ func BuildSeries(
 		demux(rows, idx, valueByDevice, len(buckets))
 	}
 
-	series := AssembleSeries(buckets, devices, valueByDevice, groupBy)
+	series := AssembleSeries(buckets, devices, valueByDevice, groupBy, field, groupFn)
 
 	unit := ""
 	if f, ok := FieldFor(field); ok {
@@ -432,10 +662,24 @@ func BuildSeries(
 		Field:    field,
 		Unit:     unit,
 		Fn:       fn,
+		GroupFn:  echoGroupFn(groupBy, groupFn),
 		Shape:    ShapeColumns,
 		Buckets:  buckets,
 		Series:   series,
 	}, nil
+}
+
+// echoGroupFn reports the member combine to echo in the response: the resolved
+// group_fn when the grouping actually combines members, and empty otherwise so
+// the field is omitted rather than advertising a combine that never ran.
+func echoGroupFn(groupBy, groupFn string) string {
+	if !Groups(groupBy) {
+		return ""
+	}
+	if groupFn == "" {
+		return DefaultGroupFn
+	}
+	return groupFn
 }
 
 // resolveGroupBy normalises the reported group_by (empty → device).

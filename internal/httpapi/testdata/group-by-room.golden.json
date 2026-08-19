@@ -19,6 +19,7 @@
   "fn": "mean",
   "from": "2026-06-11T00:00:00+01:00",
   "group_by": "room",
+  "group_fn": "mean",
   "interval": "1h",
   "series": [
     {

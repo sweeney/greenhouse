@@ -9,8 +9,8 @@ import (
 	"github.com/sweeney/greenhouse/internal/config"
 )
 
-// /floors is the discoverable vocabulary behind floors= — the relationship
-// /fields has to field=.
+// /floors is the discoverable vocabulary behind floors= and group_by=floor —
+// the relationship /fields has to field=.
 //
 // The contract that matters is WHICH floors it lists: exactly those a climate
 // device declares, which is exactly the set floors= accepts. If /floors
