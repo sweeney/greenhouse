@@ -220,11 +220,25 @@ func roundTo(x float64, n int) float64 {
 //   - room: members sharing a room are combined with the MEAN of their
 //     per-bucket readings (NON-additive — never a sum). A bucket where no member
 //     reported stays NaN.
+//
+// field names the measurement being assembled, and is required because the
+// combine is not field-agnostic: a CIRCULAR field (wind direction) cannot be
+// arithmetically averaged across members — mean(350°, 10°) is 180° (South) when
+// both readings say North. For a circular field a bucket with a single reporting
+// member passes that member's bearing through unchanged (one instantaneous
+// bearing is always valid), and a bucket where two or more members reported is a
+// GAP: there is no defensible single bearing, so this function refuses to invent
+// one. The same reason makes the linear Min/Max/Mean summary undefined on a
+// circular axis, so those are NaN for circular fields too.
+//
+// An unknown field name is treated as non-circular — the registry is the
+// authority and callers validate against it before reaching here.
 func AssembleSeries(
 	buckets []time.Time,
 	devices map[string]config.DeviceConfig,
 	valueByDevice map[string][]float64,
 	groupBy string,
+	field string,
 ) []Series {
 	n := len(buckets)
 	get := func(id string) []float64 {
@@ -240,19 +254,26 @@ func AssembleSeries(
 		return out
 	}
 
+	f, _ := FieldFor(field)
+	circular := f.Circular
+
 	switch groupBy {
 	case GroupByRoom:
-		return assembleByRoom(buckets, devices, get)
+		return assembleByRoom(buckets, devices, get, circular)
 	default: // device and unknown fall back to per-device
-		return assembleByDevice(buckets, devices, get)
+		return assembleByDevice(buckets, devices, get, circular)
 	}
 }
 
 // assembleByDevice yields one series per environmental device, sorted by id.
+//
+// A per-device series has exactly one member, so the cross-member combine never
+// engages: circular only affects the summary stats here (see buildSeries).
 func assembleByDevice(
 	buckets []time.Time,
 	devices map[string]config.DeviceConfig,
 	get func(string) []float64,
+	circular bool,
 ) []Series {
 	var out []Series
 	for _, id := range sortedDeviceIDs(devices) {
@@ -264,26 +285,96 @@ func assembleByDevice(
 		if label == "" {
 			label = id
 		}
-		out = append(out, buildSeries(id, label, d.Place(), buckets, [][]float64{get(id)}))
+		out = append(out, buildSeries(id, label, d.Place(), buckets, [][]float64{get(id)}, circular))
 	}
 	return out
+}
+
+// GroupKeyFor returns the function mapping a device to its series key under
+// groupBy, or nil when groupBy gives every device its own series (group_by=device)
+// and so never combines members.
+//
+// One definition of "which devices share a series", used by both the assembly
+// step and the up-front validation in httpapi. Two implementations of that
+// question would drift, and the thing that drifts is which readings get averaged
+// together — a silent, wrong answer rather than a loud one.
+func GroupKeyFor(groupBy string) func(config.DeviceConfig) string {
+	switch groupBy {
+	case GroupByRoom:
+		return config.DeviceConfig.Place
+	default:
+		return nil
+	}
+}
+
+// CircularGroupConflict reports whether groupBy would combine two or more of
+// these devices' readings of field into one series, when field is circular and
+// therefore cannot be combined at all (see buildSeries).
+//
+// It returns the offending group key and its member count, choosing the
+// lowest-sorting key so the error message is deterministic. A non-circular
+// field, a grouping that never combines members, or a grouping whose every group
+// is a singleton all report false.
+//
+// Devices are counted by their DECLARED membership, not by whether they have
+// data in the requested window: a request is rejected for what it asks for, so
+// the same request does not 400 today and 200 tomorrow because a sensor was
+// offline.
+func CircularGroupConflict(field, groupBy string, devices map[string]config.DeviceConfig) (string, int, bool) {
+	f, ok := FieldFor(field)
+	if !ok || !f.Circular {
+		return "", 0, false
+	}
+	keyOf := GroupKeyFor(groupBy)
+	if keyOf == nil {
+		return "", 0, false
+	}
+	counts := map[string]int{}
+	for _, d := range devices {
+		if !d.ReportsEnvironment() {
+			continue
+		}
+		if k := keyOf(d); k != "" {
+			counts[k]++
+		}
+	}
+	worst, n := "", 0
+	for k, c := range counts {
+		if c < 2 {
+			continue
+		}
+		if worst == "" || k < worst {
+			worst, n = k, c
+		}
+	}
+	return worst, n, worst != ""
 }
 
 // assembleByRoom yields one series per distinct non-empty room over environmental
 // devices, combining member readings with the per-bucket MEAN.
 //
 // Climate is non-additive: this is the mean across a room's sensors, never a total.
+//
+// For a circular field the mean is not merely non-additive but undefined, so a
+// bucket with two or more reporting members becomes a gap rather than a bearing
+// nobody measured — see buildSeries. handleSeries rejects such a request up
+// front so the API answers with an error instead of unexplained gaps; this is
+// the library-level guarantee behind that check.
 func assembleByRoom(
 	buckets []time.Time,
 	devices map[string]config.DeviceConfig,
 	get func(string) []float64,
+	circular bool,
 ) []Series {
+	keyOf := GroupKeyFor(GroupByRoom)
 	members := map[string][]string{}
 	for id, d := range devices {
 		if !d.ReportsEnvironment() {
 			continue
 		}
-		place := d.Place()
+		// An empty key is UNKNOWN, not a group: a device with no room id is
+		// absent from this view rather than keyed on "". See the README.
+		place := keyOf(d)
 		if place == "" {
 			continue
 		}
@@ -304,16 +395,37 @@ func assembleByRoom(
 		for _, id := range ids {
 			memberValues = append(memberValues, get(id))
 		}
-		s := buildSeries(k, k, k, buckets, memberValues)
+		s := buildSeries(k, k, k, buckets, memberValues, circular)
 		out = append(out, s)
 	}
 	return out
 }
 
-// buildSeries combines member per-bucket slices with the MEAN (ignoring NaN
-// gaps), rounds every value, and computes the window summary stats. All member
-// slices are assumed to be length len(buckets) with NaN for gaps.
-func buildSeries(key, label, place string, buckets []time.Time, members [][]float64) Series {
+// buildSeries combines members into one series over the bucket axis, rounding
+// every value and computing the window summary stats. All member slices are
+// assumed to be length len(buckets) with NaN for gaps.
+//
+// Members are combined with the per-bucket arithmetic MEAN (climate is
+// non-additive — never a sum), and a bucket no member reported is a NaN gap.
+//
+// circular marks an angular 0–360° field, where that arithmetic is invalid:
+// mean(350°, 10°) is 180° (South) though both readings say North. So when
+// circular is set:
+//
+//   - a bucket with exactly ONE reporting member passes that bearing through
+//     unchanged — a single instantaneous bearing is always valid;
+//   - a bucket with TWO OR MORE reporting members is a GAP, because averaging
+//     them would emit a bearing nobody measured. Refusing beats guessing: this
+//     package's contract is that greenhouse never emits a confident-but-wrong
+//     bearing (see Field.Circular and ValidFnForField);
+//   - Min/Max/Mean are NaN (JSON null). They are linear statistics and are
+//     undefined on a circular axis for exactly the same reason, whatever the
+//     member count — a legend reading "min 10°, max 350°" describes a spread of
+//     20° as though it were 340°.
+//
+// Proper vector averaging (mean of unit vectors) would let the multi-member case
+// and the summary both be answered honestly; until it lands, this refuses.
+func buildSeries(key, label, place string, buckets []time.Time, members [][]float64, circular bool) Series {
 	n := len(buckets)
 	s := Series{
 		Key:    key,
@@ -336,6 +448,12 @@ func buildSeries(key, label, place string, buckets []time.Time, members [][]floa
 			s.Values[i] = math.NaN() // gap: no member reported this bucket
 			continue
 		}
+		if circular && bcount > 1 {
+			// No defensible single bearing across members; a gap says "we cannot
+			// answer" where an average would say something false with confidence.
+			s.Values[i] = math.NaN()
+			continue
+		}
 		v := roundTo(bsum/float64(bcount), valueDP)
 		s.Values[i] = v
 		if v < min {
@@ -347,7 +465,7 @@ func buildSeries(key, label, place string, buckets []time.Time, members [][]floa
 		sum += v
 		count++
 	}
-	if count == 0 {
+	if circular || count == 0 {
 		s.Min, s.Max, s.Mean = math.NaN(), math.NaN(), math.NaN()
 		return s
 	}
@@ -416,7 +534,7 @@ func BuildSeries(
 		demux(rows, idx, valueByDevice, len(buckets))
 	}
 
-	series := AssembleSeries(buckets, devices, valueByDevice, groupBy)
+	series := AssembleSeries(buckets, devices, valueByDevice, groupBy, field)
 
 	unit := ""
 	if f, ok := FieldFor(field); ok {

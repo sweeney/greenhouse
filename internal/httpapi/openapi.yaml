@@ -332,6 +332,14 @@ components:
         sensor. "room" combines a room's sensors with the MEAN of their readings
         (never a sum).
 
+        A circular field (wind_dir_deg) cannot be combined across members at
+        all — mean(350°, 10°) is 180°, due South, though both readings say
+        North — so grouping one by a key whose group holds two or more climate
+        sensors returns 400. Chart it with group_by=device, or narrow the
+        request with devices=/rooms= until each group holds one sensor. Their
+        min/max/mean summary is null for the same reason: those are linear
+        statistics and are undefined on an angular axis.
+
       schema:
         type: string
         enum: [device, room]
@@ -483,16 +491,29 @@ components:
           items:
             type: number
             nullable: true
-          description: Per-bucket value (null for an empty bucket), aligned to buckets.
+          description: >
+            Per-bucket value (null for an empty bucket), aligned to buckets. For a
+            circular field (wind_dir_deg) a bucket in which two or more of the
+            group's members reported is also null: there is no defensible single
+            bearing, and an average would be a direction nobody measured.
         min:
           type: number
           nullable: true
+          description: >
+            Window minimum over non-null buckets. Null for a circular field: a
+            linear minimum is undefined on a 0–360° axis.
         max:
           type: number
           nullable: true
+          description: >
+            Window maximum over non-null buckets. Null for a circular field, for
+            the same reason as min.
         mean:
           type: number
           nullable: true
+          description: >
+            Window mean over non-null buckets. Null for a circular field: 350° and
+            10° are 20° apart, and their arithmetic mean (180°) says otherwise.
       required: [key, label, values, min, max, mean]
 
     SeriesResponse:

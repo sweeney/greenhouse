@@ -41,7 +41,7 @@ func TestAssembleSeries_ByDevice(t *testing.T) {
 		"sensor_d": {30, 31, 32},
 	})
 
-	got := AssembleSeries(buckets, devices, v, GroupByDevice)
+	got := AssembleSeries(buckets, devices, v, GroupByDevice, DefaultField)
 	// 4 environmental devices, plug_a excluded; sorted by id.
 	if len(got) != 4 {
 		t.Fatalf("want 4 device series, got %d", len(got))
@@ -86,7 +86,7 @@ func TestAssembleSeries_ByRoomMeansNotSums(t *testing.T) {
 		"sensor_d": {30, 10}, // room member B
 	})
 
-	got := AssembleSeries(buckets, devices, v, GroupByRoom)
+	got := AssembleSeries(buckets, devices, v, GroupByRoom, DefaultField)
 	// Locations: area-a, area-b, area-d (sorted).
 	byKey := map[string]Series{}
 	for _, s := range got {
@@ -121,7 +121,7 @@ func TestAssembleSeries_GapsArePreserved(t *testing.T) {
 	v := vals(map[string][]float64{
 		"sensor_a": {18, math.NaN(), 20},
 	})
-	got := AssembleSeries(buckets, devices, v, GroupByDevice)
+	got := AssembleSeries(buckets, devices, v, GroupByDevice, DefaultField)
 	if len(got) != 1 {
 		t.Fatalf("want 1 series, got %d", len(got))
 	}
@@ -340,7 +340,7 @@ func TestAssembleSeries_ByDevice_IncludesFireAlarms(t *testing.T) {
 		"alarm_b": {23.6, 23.5},
 		"alarm_a": {20.2, 20.3},
 		"plug_a":  {99, 99},
-	}), GroupByDevice)
+	}), GroupByDevice, DefaultField)
 
 	var keys []string
 	for _, s := range got {
@@ -366,7 +366,7 @@ func TestAssembleSeries_ByLocation_MeansAcrossMixedClasses(t *testing.T) {
 		"probe_a": {22.0},
 		"alarm_b": {24.0},
 		"alarm_a": {20.0},
-	}), GroupByRoom)
+	}), GroupByRoom, DefaultField)
 
 	byKey := map[string]Series{}
 	for _, s := range got {

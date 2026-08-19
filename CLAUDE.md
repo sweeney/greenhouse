@@ -37,6 +37,16 @@ shapes, the Influx Querier + fake, the Server/auth/CORS/spec skeleton, the confi
   The floorplan owns that fact, and a second implementation of it here would disagree
   the moment a room id is spelled unexpectedly. An undeclared floor is UNKNOWN: the
   catalog reports `""` and `floors=` never matches it.
+- **Circular fields are never combined, on EITHER axis.** `wind_dir_deg` is a 0–360°
+  bearing: `mean(350°, 10°)` is `180°` (South) when both readings say North. `fn=`
+  refuses the linear aggregations for it, and so must the **cross-member combine** —
+  `AssembleSeries` therefore takes `field`. A group with 2+ climate sensors 400s up
+  front (`climate.CircularGroupConflict`), a single-member bucket passes its bearing
+  through, and `min`/`max`/`mean` are null because linear summaries are undefined on
+  an angular axis. Never re-introduce a combine that cannot see the field — that
+  blindness is the bug this fixed (#24). Grouping is defined once, in
+  `climate.GroupKeyFor`: two implementations of "which devices share a series" would
+  drift, and what drifts is which readings get averaged together.
 - **`environment_fields` is a hint, and staleness must not lose data.** It declares what a device
   writes to `device_environment`. Where declared, `/devices/{id}/series` 400s on a field the device
   does not report and `/series` omits such devices; where **undeclared**, coverage is UNKNOWN and

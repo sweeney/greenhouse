@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -388,6 +389,23 @@ func (s *Server) handleSeries(w http.ResponseWriter, r *http.Request) {
 	// nothing. (The single-device endpoint promises exactly one series and so
 	// 400s instead — see handleDeviceSeries.)
 	devices = filterDevicesReportingField(devices, field)
+
+	// A circular field (wind direction) cannot be combined across a group's
+	// members: mean(350°, 10°) is 180° (South) though both readings say North.
+	// fn= already refuses the linear aggregations for these fields; refusing here
+	// closes the same hole on the grouping axis.
+	//
+	// Said up front rather than served as gaps: null means "no reading", so a
+	// silently-gapped series is indistinguishable from an outage — the same
+	// reasoning as handleDeviceSeries' unreportable-field 400. Narrowing the
+	// request (rooms=, devices=) until each group holds one sensor, or
+	// group_by=device, answers it honestly.
+	if key, n, conflict := climate.CircularGroupConflict(field, groupBy, devices); conflict {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf(
+			"cannot group '%s' by %s: %s holds %d sensors and a 0–360° bearing has no arithmetic mean; use group_by=device",
+			field, groupBy, key, n))
+		return
+	}
 
 	win, iv, ok := s.resolveSeriesParams(w, r)
 	if !ok {
