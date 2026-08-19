@@ -32,6 +32,16 @@ type ConfigProvider interface {
 	Devices() map[string]config.DeviceConfig
 }
 
+// FloorProvider supplies the floor records behind /floors. The Fetcher satisfies
+// it; tests inject a fake. It is OPTIONAL — Server.FloorRecords may be nil, and
+// then /floors still lists every floor that holds a climate sensor with name and
+// order reported as unknown. Floor labels are presentation detail, so a missing
+// floorplan must never stop a climate service serving climate.
+type FloorProvider interface {
+	// Floors returns the current floorplan snapshot keyed by floor id.
+	Floors() map[string]config.FloorConfig
+}
+
 // ConfigStatus surfaces the remote-config fetcher's per-namespace status for
 // /healthz. The Fetcher satisfies it; tests inject a fake. May be nil (then
 // /healthz omits remote_config).
@@ -73,6 +83,12 @@ type Server struct {
 	SiteID           string
 	DevicesNamespace string
 
+	// FloorplanNamespace is the optional floorplan namespace, reported on
+	// /healthz so an operator can tell "not configured" from "configured but not
+	// yet fetched" without reading the host's config file. Empty on the instances
+	// that do not set one, which is not a fault.
+	FloorplanNamespace string
+
 	// Bucket is the Influx bucket the data handlers query (e.g. "statehouse").
 	// main.go sets it from config.
 	Bucket string
@@ -89,6 +105,12 @@ type Server struct {
 	// Fetcher; tests inject a fake. May be nil only for the public-route tests
 	// (data handlers require it).
 	Config ConfigProvider
+
+	// FloorRecords supplies floor names and storey order for /floors. The real
+	// impl is the Fetcher; tests inject a fake. May be nil (and is, whenever no
+	// floorplan namespace is configured) — /floors then reports every floor's
+	// name and order as unknown rather than failing.
+	FloorRecords FloorProvider
 
 	// RemoteConfig surfaces per-namespace remote-config fetch status on
 	// /healthz. The real impl is the Fetcher (which satisfies ConfigStatus);
@@ -108,6 +130,16 @@ func (s *Server) clock() testutil.Clock {
 		return s.Clock
 	}
 	return testutil.RealClock{}
+}
+
+// floors returns the current floor records, or nil when no floorplan provider is
+// configured. A nil map reads as empty, so /floors degrades to "every floor is
+// unknown" rather than panicking on an instance with no floorplan namespace.
+func (s *Server) floors() map[string]config.FloorConfig {
+	if s.FloorRecords == nil {
+		return nil
+	}
+	return s.FloorRecords.Floors()
 }
 
 // loc returns the configured timezone, defaulting to UTC.
@@ -147,6 +179,7 @@ func newMux(s *Server) *http.ServeMux {
 	mux.Handle("GET /devices/{id}/series", authmw(http.HandlerFunc(s.handleDeviceSeries)))
 	mux.Handle("GET /devices/{id}/latest", authmw(http.HandlerFunc(s.handleDeviceLatest)))
 	mux.Handle("GET /series", authmw(http.HandlerFunc(s.handleSeries)))
+	mux.Handle("GET /floors", authmw(http.HandlerFunc(s.handleFloors)))
 	mux.Handle("GET /fields", authmw(http.HandlerFunc(s.handleFields)))
 	return mux
 }
@@ -195,6 +228,14 @@ func (s *Server) Start(ctx context.Context) error {
 type siteHealth struct {
 	ID               string `json:"id,omitempty"`
 	DevicesNamespace string `json:"devices_namespace,omitempty"`
+	// FloorplanNamespace is reported for the same reason, and answers a question
+	// the remote_config block cannot: that block distinguishes "configured and
+	// failing" from "configured and fine" only AFTER a fetch attempt, so an
+	// operator seeing blank floor names cannot otherwise tell "no floorplan
+	// namespace configured" from "configured, first fetch hasn't landed" without
+	// reading the host's config file. omitempty keeps it invisible on the
+	// instances that do not set it.
+	FloorplanNamespace string `json:"floorplan_namespace,omitempty"`
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -215,8 +256,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 		authStatus = "disabled"
 	}
 	var site *siteHealth
-	if s.SiteID != "" || s.DevicesNamespace != "" {
-		site = &siteHealth{ID: s.SiteID, DevicesNamespace: s.DevicesNamespace}
+	if s.SiteID != "" || s.DevicesNamespace != "" || s.FloorplanNamespace != "" {
+		site = &siteHealth{
+			ID:                 s.SiteID,
+			DevicesNamespace:   s.DevicesNamespace,
+			FloorplanNamespace: s.FloorplanNamespace,
+		}
 	}
 	h := health{
 		Site:       site,

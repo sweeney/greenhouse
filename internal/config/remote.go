@@ -33,7 +33,8 @@ type NamespaceStatus struct {
 
 // Fetcher fetches the devices namespace greenhouse depends on — named by
 // cfg.Site.DevicesNamespace, which is required and has no default — and HOLDS it
-// as a live snapshot.
+// as a live snapshot. It also fetches the OPTIONAL floorplan namespace
+// (cfg.Site.FloorplanNamespace) when one is configured.
 //
 // Greenhouse is read-side and stateless: the Fetcher is the authoritative
 // in-memory view that the HTTP handlers query via the ConfigProvider interface
@@ -57,8 +58,16 @@ type Fetcher struct {
 	// Refresh a no-op with a warning rather than a request for the empty name.
 	DevicesNamespace string
 
+	// FloorplanNamespace names the namespace holding this site's floor records.
+	// OPTIONAL: an empty value is not an error and records no status — greenhouse
+	// simply holds no floor records and reports every floor's name and order as
+	// UNKNOWN. It is presentation detail, so it must never be able to stop a
+	// climate service serving climate.
+	FloorplanNamespace string
+
 	mu       sync.RWMutex
 	devices  map[string]DeviceConfig
+	floors   map[string]FloorConfig
 	statuses map[string]NamespaceStatus
 }
 
@@ -75,6 +84,23 @@ func (f *Fetcher) Devices() map[string]DeviceConfig {
 	defer f.mu.RUnlock()
 	out := make(map[string]DeviceConfig, len(f.devices))
 	for k, v := range f.devices {
+		out[k] = v
+	}
+	return out
+}
+
+// Floors returns a copy of the current floor-record snapshot keyed by floor id.
+// Safe for concurrent use. Implements httpapi.FloorProvider.
+//
+// An empty map means either that no floorplan namespace is configured or that
+// none has been fetched yet. Both are UNKNOWN rather than "there are no floors":
+// callers enrich what they have and report the rest empty, never inferring that
+// a floor does not exist because its record is missing.
+func (f *Fetcher) Floors() map[string]FloorConfig {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	out := make(map[string]FloorConfig, len(f.floors))
+	for k, v := range f.floors {
 		out[k] = v
 	}
 	return out
@@ -120,6 +146,35 @@ func (f *Fetcher) Refresh(ctx context.Context) {
 		return
 	}
 	f.refreshDevices(ctx, token)
+	f.refreshFloorplan(ctx, token)
+}
+
+// refreshFloorplan fetches the optional floorplan namespace.
+//
+// Fail-open like refreshDevices, and additionally OPTIONAL: an unset namespace
+// is silent and records no status, because there is nothing configured to be
+// unhealthy about. A configured-but-failing namespace does record one, so an
+// operator who asked for floor records can see they are not arriving — but it
+// still never blocks the devices snapshot or the endpoints that matter.
+func (f *Fetcher) refreshFloorplan(ctx context.Context, token string) {
+	if f.FloorplanNamespace == "" {
+		return
+	}
+	var floors map[string]FloorConfig
+	if err := f.fetch(ctx, token, f.FloorplanNamespace, &floors); err != nil {
+		f.warn("remote config: floorplan namespace unavailable, keeping last-known",
+			"namespace", f.FloorplanNamespace, "error", err)
+		f.recordStatus(f.FloorplanNamespace, err)
+		return
+	}
+	if floors == nil {
+		floors = map[string]FloorConfig{}
+	}
+	normaliseFloors(floors)
+	f.mu.Lock()
+	f.floors = floors
+	f.mu.Unlock()
+	f.recordStatus(f.FloorplanNamespace, nil)
 }
 
 func (f *Fetcher) refreshDevices(ctx context.Context, token string) {

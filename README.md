@@ -32,9 +32,10 @@ requires a Bearer JWT (user **or** service token).
 
 | Route | Returns |
 |---|---|
-| `GET /healthz` | status, version, uptime, influx_reachable, remote_config status |
+| `GET /healthz` | status, version, uptime, influx_reachable, resolved site (incl. namespaces), remote_config status |
 | `GET /openapi.json` | the OpenAPI spec as JSON |
 | `GET /devices` | climate device catalog: id, display_name, room, floor, class, and an `environment_fields` hint |
+| `GET /floors` | floor catalog: id, name, order, elevation, device_count — the vocabulary `floors=` accepts |
 | `GET /devices/{id}/series` | single-device, single-field time-series |
 | `GET /series` | multi-series; `group_by` device (default), room or floor, combined per `group_fn` |
 | `GET /devices/{id}/latest` | the device's most recent reading across its fields (within the last 7 days) |
@@ -181,7 +182,8 @@ room. A bucket nobody reported stays `null`, never a zero.
 ### Charting a floor
 
 `group_by=floor` combines every sensor **declaring** that floor, across its rooms
-(never a floor derived from the room id — the floorplan owns that fact).
+(never a floor derived from the room id — the floorplan owns that fact). `GET /floors`
+lists the floors available to chart, with their names and storey order.
 
 The objection this used to be withheld for — that a floor-wide mean averages
 rooms of wildly different character into a number describing nowhere — was an
@@ -245,6 +247,26 @@ taxonomy that disagrees the moment a room id is spelled unexpectedly. A device w
 entry declares no floor is UNKNOWN — reported as `""`, and never matched by `floors=`
 — rather than guessed at.
 
+`GET /floors` publishes the floor records themselves — `id`, `name`, `order`,
+`elevation` and a `device_count` — so a client stops re-deriving two things it cannot
+know: **storey order** (floor ids do not sort into building order, so every consumer
+that guesses is wrong the moment it meets a different building) and the **display
+name** (which consumers otherwise title-case from the id and hope). It is the same
+re-derivation `floor` itself removed, one level up: a second implementation of the
+floorplan's taxonomy living in every client instead of in one service.
+
+Which floors are listed is the endpoint's real contract: **exactly the floors a climate
+device declares**, which is exactly the set `floors=` accepts. A picker filled from
+`/floors` therefore cannot produce a 400. A floorplan record for a floor with no climate
+sensor is *not* listed — it exists in the building, but not as far as the climate API is
+concerned — and a floor devices declare but the floorplan has no record for *is* listed,
+with `name` empty and `order` null. Those are nullable rather than defaulted because
+greenhouse reports UNKNOWN where it has no answer; it never invents a label or a
+position, for the same reason it never derives a device's floor from its room id.
+
+Rows come back in declared `order` ascending, then by id, so undeclared ones sort last
+and the list renders top to bottom without a client re-sorting it.
+
 `/series` accepts `floors=` for the same vocabulary, so a floor read off the catalog
 can be handed straight back as a filter, and `group_by=floor` charts it as one line
 (see **Charting a floor**). A device with a declared floor but no room id is absent
@@ -259,6 +281,7 @@ The devices namespace is named by config, so a site reads its own:
 site:
   id: home
   devices_namespace: devices_home
+  floorplan_namespace: floorplan_home   # optional
 ```
 
 `devices_namespace` is **required — there is no default.** It once fell back to the
@@ -268,11 +291,22 @@ with `/healthz` still reporting `ok` and every endpoint honestly serving zero de
 Greenhouse refuses to start when it is unset instead, because boot is the only place
 that can still tell "unnamed" apart from "named and empty".
 
+`floorplan_namespace` is **optional**, and deliberately so. Greenhouse charts devices; a
+floor's label and storey order are presentation detail. Unset, `/floors` still lists every
+floor that holds a climate sensor — with `name` and `order` reported as unknown — and a
+fetch failure is fail-open and never touches the devices snapshot. A missing floorplan can
+degrade the labels; it can never stop a climate service serving climate.
+
+`/healthz`'s `site` block reports it alongside `devices_namespace` (omitted when unset),
+so an operator seeing blank floor names can tell "no floorplan namespace configured" from
+"configured, first fetch hasn't landed" — a distinction `remote_config` only makes after a
+fetch has been attempted.
+
 
 Local YAML (`/etc/greenhouse/config.yaml`, see `config/config.example.yaml`):
 `http.listen`, `influx{url,org,bucket,token_file}`,
 `identity{base_url,client_id,client_secret}`, `remote_config.base_url`,
-`site{id,devices_namespace}`, `house.timezone`, `auth.allow_insecure`. Device inventory
+`site{id,devices_namespace,floorplan_namespace}`, `house.timezone`, `auth.allow_insecure`. Device inventory
 is fetched from the remote config service (one devices namespace only — **no** tariffs,
 and `site.devices_namespace` must name it). Fetches are fail-open
 (log + keep last-known) with SIGHUP reload. Greenhouse needs its own Influx

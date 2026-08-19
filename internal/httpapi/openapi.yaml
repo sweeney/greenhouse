@@ -213,6 +213,42 @@ paths:
         "502":
           $ref: "#/components/responses/BadGateway"
 
+  /floors:
+    get:
+      summary: Floor catalog
+      description: >
+        The floors that hold at least one climate sensor, each with the name,
+        storey order and elevation the floorplan namespace declares. This is the
+        discoverable vocabulary behind the `floors=` filter and `group_by=floor`,
+        the same relationship /fields has to `field=`.
+
+        WHICH floors appear is exactly the set `floors=` accepts: a floor no
+        climate device declares is not listed, because /series would reject it —
+        a picker built from this endpoint is therefore never able to produce a
+        400. A floor that devices declare but the floorplan has no record for IS
+        listed, with `name` empty and `order`/`elevation` null.
+
+        `name` and `order` are nullable rather than defaulted because greenhouse
+        passes the floorplan's answers through and reports UNKNOWN where it has
+        none. It never title-cases an id into a label or infers a storey position
+        from sort order, for the same reason it never derives a device's floor
+        from its room id: the floorplan owns that taxonomy, and a second
+        implementation of it in every consumer is what this endpoint removes.
+
+        Ordered by declared `order` ascending, then by id, so floors with records
+        come back in building order and undeclared ones sort last deterministically.
+      operationId: getFloors
+      tags: [data]
+      responses:
+        "200":
+          description: Floor catalog
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FloorsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /fields:
     get:
       summary: Field registry
@@ -772,6 +808,50 @@ components:
             does not declare it, in which case it may over-advertise.
       required: [id, display_name, room, floor, class, environment_fields]
 
+    FloorCatalogEntry:
+      type: object
+      properties:
+        id:
+          type: string
+          description: >
+            The floor id. Pass it back as `floors=` or chart it with
+            `group_by=floor`; it is the value devices carry in their `floor`
+            property.
+        name:
+          type: string
+          description: >
+            Display label from the floorplan namespace, e.g. "Ground Floor".
+            Empty when the namespace declares none — unknown, not derived from
+            the id.
+        order:
+          type: integer
+          nullable: true
+          description: >
+            Storey position, ascending from the lowest floor. Null when the
+            floorplan declares none. Nullable rather than defaulted because 0 is a
+            legitimate order (a basement), so it cannot double as "undeclared".
+        elevation:
+          type: number
+          nullable: true
+          description: >
+            Metres above the site datum, null when undeclared. Nullable for the
+            same reason as order: 0.0 is a real elevation.
+        device_count:
+          type: integer
+          description: >
+            How many climate devices declare this floor. Always at least 1, since
+            a floor with none is not listed.
+      required: [id, name, order, elevation, device_count]
+
+    FloorsResponse:
+      type: object
+      properties:
+        floors:
+          type: array
+          items:
+            $ref: "#/components/schemas/FloorCatalogEntry"
+      required: [floors]
+
     DevicesCatalog:
       type: object
       properties:
@@ -819,12 +899,21 @@ components:
             devices_namespace:
               type: string
               example: devices_home
+            floorplan_namespace:
+              type: string
+              example: floorplan_home
+              description: >
+                The optional floorplan namespace, absent when none is configured.
+                Reported so an operator seeing blank floor names on /floors can
+                tell "not configured" from "configured but not yet fetched" —
+                remote_config distinguishes those only after a fetch attempt.
         remote_config:
           type: object
           description: >-
             Per-namespace status of the most recent remote-config fetch, keyed by
-            the namespace actually read. That key is whatever site.devices_namespace
-            names (e.g. `devices_home`); it is required and has no default, so the
+            the namespaces actually read: whatever site.devices_namespace names
+            (e.g. `devices_home`), plus site.floorplan_namespace when one is
+            configured. devices_namespace is required and has no default, so the
             key varies per site and per property. A monitor keyed on a literal
             namespace stops matching when a site migrates, and a missing key reads
             as healthy in most check expressions. Alert on the top-level `status`

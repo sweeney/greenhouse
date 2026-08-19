@@ -62,6 +62,21 @@ shapes, the Influx Querier + fake, the Server/auth/CORS/spec skeleton, the confi
   blindness is the bug this fixed (#24). Grouping is defined once, in
   `climate.GroupKeyFor`: two implementations of "which devices share a series" would
   drift, and what drifts is which readings get averaged together.
+- **`/floors` lists the FILTER vocabulary, not the floorplan.** It serves exactly the
+  floors at least one climate device declares — the same set `floors=` accepts — so a
+  picker filled from it can never produce a 400. A floorplan record for a floor with no
+  climate sensor is omitted; a declared floor with no record is listed with `name` empty
+  and `order` null. Never build this listing from the floorplan namespace instead: the two
+  endpoints would then disagree, which is the failure `/devices`↔`/series` is already
+  tested against. `name`/`order`/`elevation` are passed through and nullable — 0 is a real
+  order (a basement) and 0.0 a real elevation, which is why `Order`/`Elevation` are
+  pointers.
+- **`site.floorplan_namespace` is OPTIONAL** (unlike `devices_namespace`, which is required
+  with no default). Greenhouse charts devices; floor labels are presentation detail. Unset
+  is silent — no request, no `/healthz` status — and a configured-but-failing floorplan is
+  fail-open and must never touch the devices snapshot. This is the second namespace
+  greenhouse reads; keep it strictly optional so the "one required namespace" boot
+  guarantee is unchanged.
 - **`environment_fields` is a hint, and staleness must not lose data.** It declares what a device
   writes to `device_environment`. Where declared, `/devices/{id}/series` 400s on a field the device
   does not report and `/series` omits such devices; where **undeclared**, coverage is UNKNOWN and
@@ -88,11 +103,13 @@ shapes, the Influx Querier + fake, the Server/auth/CORS/spec skeleton, the confi
 ## Config & auth (see PLAN §7)
 
 - Config is remote at `config.swee.net` (`GET /api/v1/config/{namespace}`), overlaid on local YAML
-  (`/etc/greenhouse/config.yaml`). Greenhouse reads **one devices namespace only** — named by
+  (`/etc/greenhouse/config.yaml`). Greenhouse reads **one REQUIRED devices namespace** — named by
   `site.devices_namespace`, which is **required with no default** (the shared `statehouse_devices`
   document was deleted, so an unset namespace refuses to boot rather than serving zero devices
-  while looking healthy) — and does NOT use `energy_tariffs`. `/healthz`'s
-  `remote_config` block is keyed by whichever namespace is actually read. Fetches are fail-open (log + keep last-known) with SIGHUP reload.
+  while looking healthy) — plus the OPTIONAL `site.floorplan_namespace` (floor names and storey
+  order for `/floors`; unset is silent and never affects the devices snapshot). It does NOT use
+  `energy_tariffs`. `/healthz`'s `remote_config` block is keyed by whichever namespaces are
+  actually read. Fetches are fail-open (log + keep last-known) with SIGHUP reload.
 - Auth via `github.com/sweeney/identity/common` **v0.3.0**: `auth.JWKSVerifier` verifies inbound
   tokens (JWKS); `auth.TokenSource` is the shared outbound `client_credentials` source (no local
   copy — it was extracted to common in v0.3.0). **Accept service tokens** (`ParseServiceToken`) as

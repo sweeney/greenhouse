@@ -53,6 +53,18 @@ type SiteConfig struct {
 	// /healthz still reporting ok and every endpoint honestly serving zero devices.
 	// An unset namespace is refused at boot instead; see validateBootConfig.
 	DevicesNamespace string `yaml:"devices_namespace"`
+
+	// FloorplanNamespace is the config namespace holding this site's floor
+	// records (id, name, order, elevation). OPTIONAL, unlike DevicesNamespace:
+	// greenhouse charts devices, and a floor's label and storey order are
+	// presentation detail a chart does not need. Unset means /floors still lists
+	// every floor that holds a climate sensor — the vocabulary `floors=` accepts —
+	// with name and order UNKNOWN, which is honest and still saves a client
+	// scanning the whole device catalog.
+	//
+	// Being optional is also what keeps this additive: an instance that never
+	// sets it behaves exactly as it did before floors were published.
+	FloorplanNamespace string `yaml:"floorplan_namespace"`
 }
 
 // UnmarshalYAML accepts either the block form or a bare id:
@@ -61,6 +73,7 @@ type SiteConfig struct {
 //	site:
 //	  id: home
 //	  devices_namespace: devices_home
+//	  floorplan_namespace: floorplan_home
 func (s *SiteConfig) UnmarshalYAML(unmarshal func(any) error) error {
 	var id string
 	if err := unmarshal(&id); err == nil {
