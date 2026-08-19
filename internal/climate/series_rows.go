@@ -94,6 +94,7 @@ type RowsResponse struct {
 	To       string        `json:"to"`
 	Interval string        `json:"interval"`
 	GroupBy  string        `json:"group_by"`
+	GroupFn  string        `json:"group_fn,omitempty"`
 	Field    string        `json:"field"`
 	Unit     string        `json:"unit"`
 	Fn       string        `json:"fn"`
@@ -112,6 +113,7 @@ func (r SeriesResponse) Rows() RowsResponse {
 		To:       r.To,
 		Interval: r.Interval,
 		GroupBy:  r.GroupBy,
+		GroupFn:  r.GroupFn,
 		Field:    r.Field,
 		Unit:     r.Unit,
 		Fn:       r.Fn,

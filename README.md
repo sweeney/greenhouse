@@ -36,7 +36,7 @@ requires a Bearer JWT (user **or** service token).
 | `GET /openapi.json` | the OpenAPI spec as JSON |
 | `GET /devices` | climate device catalog: id, display_name, room, floor, class, and an `environment_fields` hint |
 | `GET /devices/{id}/series` | single-device, single-field time-series |
-| `GET /series` | multi-series; `group_by` device (default) or room (mean per room) |
+| `GET /series` | multi-series; `group_by` device (default), room or floor, combined per `group_fn` |
 | `GET /devices/{id}/latest` | the device's most recent reading across its fields (within the last 7 days) |
 | `GET /fields` | the field registry (name, unit, default fn) |
 
@@ -71,10 +71,15 @@ requires a Bearer JWT (user **or** service token).
   offered (non-additive). Bad fn → 400. `wind_dir_deg` is **circular** (a 0–360°
   bearing): arithmetic mean/min/max are wrong on an angular axis, so it accepts
   only `last` (and defaults to it); `mean`/`min`/`max` for it → 400.
-- `group_by` — `device` (default) \| `room`. Bad value → 400. A **circular**
-  field cannot be combined across a group's members at all, so grouping one by a
-  key whose group holds two or more climate sensors → 400. Use `group_by=device`,
-  or narrow with `devices=`/`rooms=` until each group holds one sensor.
+- `group_by` — `device` (default) \| `room` \| `floor`. Bad value → 400. A device
+  declaring no room (for `room`) or no floor (for `floor`) has UNKNOWN membership
+  and is **omitted** rather than keyed on `""`; `group_by=device` charts it. A
+  **circular** field cannot be combined across a group's members at all, so
+  grouping one by a key whose group holds two or more climate sensors → 400.
+- `group_fn` — how a group's **members** are combined: `mean` (default) \| `min`
+  \| `max`. Applied *after* `fn` (see below). `last` → 400 (not a spatial
+  statistic); `sum` → 400 (non-additive); supplying it with `group_by=device` →
+  400, because that grouping combines nothing.
 - `devices` — (`/series` only) CSV of device ids to chart, e.g.
   `devices=sensor_b,sensor_c`. Restricts the series to those
   sensors (omit for all climate devices). An unknown or non-climate id → 400.
@@ -144,6 +149,52 @@ narrows on a positive declaration.
 
 ## Rooms
 
+### Two aggregation axes: `fn` then `group_fn`
+
+Greenhouse aggregates twice, and the steps are independent:
+
+```
+per device:  fn=        collapses a device's samples within a bucket  (Influx aggregateWindow)
+per group:   group_fn=  combines the group's devices into one series  (Go, after the query)
+```
+
+`fn` runs **first**, inside Influx. `group_fn` runs **second**, here. They **do
+not commute**:
+
+- `fn=mean&group_fn=max` — "the warmest member's bucket average"
+- `fn=max&group_fn=mean` — "the mean of each member's peak"
+
+Both are legitimate questions with different answers, so the order is part of the
+contract rather than something to infer.
+
+`group_fn` defaults to `mean`, which is what greenhouse always did — every
+request written before the parameter existed is unchanged. Neither axis offers
+`sum`: climate is non-additive however it is sliced.
+
+**Gaps.** Every combine skips a member that did not report, exactly as the mean
+always did — a `min` that counted an absent sensor as `0` would report a freezing
+room. A bucket nobody reported stays `null`, never a zero.
+
+### Charting a floor
+
+`group_by=floor` combines every sensor **declaring** that floor, across its rooms
+(never a floor derived from the room id — the floorplan owns that fact).
+
+The objection this used to be withheld for — that a floor-wide mean averages
+rooms of wildly different character into a number describing nowhere — was an
+argument against a *hardcoded* floor mean, and `group_by=room` applied exactly
+that hardcoded mean itself. `group_fn` answers it properly: chart a floor three
+times as `min`, `mean` and `max` and render it as a **band with the mean through
+it**. A sun-facing room and a cold stairwell then show up as the band's *width*,
+which is precisely the information a single mean loses.
+
+A device declaring no floor is UNKNOWN and is **omitted** from a floor grouping,
+exactly as a room-less device is omitted from `group_by=room`. Greenhouse neither
+keys a series on `""` nor invents an "unknown" bucket: neither is a valid floor
+id, and an invented key would be a value `floors=` rejects — `/series` would
+advertise a vocabulary `/series` itself refuses. Chart such a device with
+`group_by=device`.
+
 ### Circular fields are never combined
 
 `wind_dir_deg` is a 0–360° bearing, and the arithmetic that is merely
@@ -190,19 +241,10 @@ entry declares no floor is UNKNOWN — reported as `""`, and never matched by `f
 — rather than guessed at.
 
 `/series` accepts `floors=` for the same vocabulary, so a floor read off the catalog
-can be handed straight back as a filter. Grouping is still `device` or `room` — there is
-no `group_by=floor` **yet**. Chart the rooms on a floor with `floors=…&group_by=room`,
-noting that `group_by=room` keys on rooms, so a device with a declared floor but no room
-id is absent from that view; `group_by=device` charts it.
-
-Floor grouping is deferred, not rejected. The objection to it — that a floor-wide mean
-averages rooms of wildly different character into a number describing nowhere — argues
-against a *hardcoded* floor mean, and `group_by=room` already applies exactly that
-hardcoded cross-member mean with no way for a caller to ask for anything else. The fix
-is one the room case needs too: a `group_fn` (`mean`/`min`/`max`, applied after `fn`)
-that lets a caller say which question they are asking, so a floor can render as a
-min–max band with the mean through it and heterogeneity shows up as the band's width.
-That is a larger change than a new filter, so it is tracked in #23.
+can be handed straight back as a filter, and `group_by=floor` charts it as one line
+(see **Charting a floor**). A device with a declared floor but no room id is absent
+from `group_by=room` — it has no room to be keyed on — and `group_by=floor` or
+`group_by=device` charts it.
 
 ## Config
 

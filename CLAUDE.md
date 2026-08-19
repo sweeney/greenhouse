@@ -37,6 +37,21 @@ shapes, the Influx Querier + fake, the Server/auth/CORS/spec skeleton, the confi
   The floorplan owns that fact, and a second implementation of it here would disagree
   the moment a room id is spelled unexpectedly. An undeclared floor is UNKNOWN: the
   catalog reports `""` and `floors=` never matches it.
+- **Two aggregation axes, applied in order and NOT commutative.** `fn=` collapses one
+  device's samples within a bucket (Influx `aggregateWindow`); `group_fn=` combines a
+  group's devices (Go, in `buildSeries`). `fn=mean&group_fn=max` and `fn=max&group_fn=mean`
+  are different legitimate questions — document the order, never leave it to be inferred.
+  `group_fn` defaults to `mean` (what greenhouse always did), rejects `last` (across
+  members that is "whichever sensor reported most recently", not a spatial statistic),
+  and rejects being supplied with `group_by=device` (which combines nothing). No `sum`
+  on either axis. Never hardcode a cross-member combine again — that silent mean is what
+  made the `group_by=floor` omission indefensible (#23).
+- **UNKNOWN group membership is OMITTED, never keyed on `""` and never bucketed as
+  "unknown".** A device declaring no room (`group_by=room`) or no floor (`group_by=floor`)
+  is absent from that view and charted by `group_by=device`. `""` is not a valid id, and
+  an invented key would be a value `rooms=`/`floors=` reject — `/series` would advertise a
+  vocabulary `/series` itself refuses. Settled identically on both axes in
+  `climate.assembleByGroup`; do not answer it differently for a future third axis.
 - **Circular fields are never combined, on EITHER axis.** `wind_dir_deg` is a 0–360°
   bearing: `mean(350°, 10°)` is `180°` (South) when both readings say North. `fn=`
   refuses the linear aggregations for it, and so must the **cross-member combine** —
