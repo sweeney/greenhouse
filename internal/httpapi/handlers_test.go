@@ -25,24 +25,24 @@ func (f fakeConfig) Devices() map[string]config.DeviceConfig { return f.devices 
 func testDevices() map[string]config.DeviceConfig {
 	return map[string]config.DeviceConfig{
 		// No environment_fields → the catalog falls back to the full registry.
-		"climate_basement": {
-			Class: "environmental_sensor", Location: "basement", DisplayName: "Basement",
+		"sensor_a": {
+			Class: "environmental_sensor", Location: "area-a", DisplayName: "Sensor A",
 		},
 		// Explicit hint → the catalog reports exactly these.
-		"climate_weatherstation": {
-			Class: "environmental_sensor", Location: "garden", DisplayName: "Weather Station",
+		"outdoor_station": {
+			Class: "environmental_sensor", Location: "area-b", DisplayName: "Outdoor Station",
 			EnvironmentFields: []string{"temperature_c", "humidity_pct", "pressure_hpa", "wind_speed_ms", "wind_dir_deg"},
 		},
 		// fire_alarm is charted like any other climate class. It sits in a room
-		// holding NO environmental_sensor, mirroring prod (office/utility): the
+		// holding NO environmental_sensor, mirroring prod: the
 		// room has no climate coverage at all unless fire alarms are included.
-		"firealarm_utility": {
-			Class: "fire_alarm", Location: "utility", DisplayName: "Fire Alarm: Utility",
+		"alarm_a": {
+			Class: "fire_alarm", Location: "area-c", DisplayName: "Alarm A",
 			EnvironmentFields: []string{"temperature_c"},
 		},
 		// Non-climate: must never appear in the catalog or a series.
-		"winefridge": {
-			Class: "continuous_power_device", Location: "kitchen", DisplayName: "Wine Fridge",
+		"plug_a": {
+			Class: "continuous_power_device", Location: "area-e", DisplayName: "Plug A",
 		},
 	}
 }
@@ -112,6 +112,7 @@ type catalogResp struct {
 		ID                string   `json:"id"`
 		Class             string   `json:"class"`
 		Room              string   `json:"room"`
+		Floor             string   `json:"floor"`
 		EnvironmentFields []string `json:"environment_fields"`
 	} `json:"devices"`
 }
@@ -133,13 +134,13 @@ func TestDevices_OnlyClimate(t *testing.T) {
 	s, _ := dataSetup(t)
 	resp := getCatalog(t, s)
 
-	// winefridge (continuous_power_device) excluded; the two environmental
+	// plug_a (continuous_power_device) excluded; the two environmental
 	// sensors and the fire alarm remain.
 	if len(resp.Devices) != 3 {
 		t.Fatalf("want 3 climate devices, got %d: %+v", len(resp.Devices), resp.Devices)
 	}
 	for _, d := range resp.Devices {
-		if d.ID == "winefridge" {
+		if d.ID == "plug_a" {
 			t.Errorf("non-climate device leaked: %s", d.ID)
 		}
 		if len(d.EnvironmentFields) == 0 {
@@ -157,15 +158,15 @@ func TestDevices_IncludesFireAlarm(t *testing.T) {
 
 	var found bool
 	for _, d := range resp.Devices {
-		if d.ID != "firealarm_utility" {
+		if d.ID != "alarm_a" {
 			continue
 		}
 		found = true
 		if d.Class != "fire_alarm" {
 			t.Errorf("class = %q, want fire_alarm (class is reported as-is)", d.Class)
 		}
-		if d.Room != "utility" {
-			t.Errorf("room = %q, want utility", d.Room)
+		if d.Room != "area-c" {
+			t.Errorf("room = %q, want area-c", d.Room)
 		}
 		if got := d.EnvironmentFields; len(got) != 1 || got[0] != "temperature_c" {
 			t.Errorf("environment_fields = %v, want [temperature_c]", got)
@@ -173,6 +174,18 @@ func TestDevices_IncludesFireAlarm(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("fire alarm missing from catalog: %+v", resp.Devices)
+	}
+}
+
+// The catalog reports a floor derived from the room id, and reports it as empty
+// rather than guessing when the device is still on a free-text location — which
+// is what every device in the pre-migration fixture carries.
+func TestDevices_FloorIsEmptyWithoutARoomID(t *testing.T) {
+	s, _ := dataSetup(t)
+	for _, d := range getCatalog(t, s).Devices {
+		if d.Floor != "" {
+			t.Errorf("%s: floor = %q, want empty — %q is a legacy location, not a room id", d.ID, d.Floor, d.Room)
+		}
 	}
 }
 
@@ -187,11 +200,11 @@ func TestDevices_EnvironmentFieldsHintVsFallback(t *testing.T) {
 	for _, d := range resp.Devices {
 		byID[d.ID] = d.EnvironmentFields
 	}
-	if len(byID["climate_weatherstation"]) != 5 {
-		t.Errorf("weatherstation = %v, want the explicit 5 from config", byID["climate_weatherstation"])
+	if len(byID["outdoor_station"]) != 5 {
+		t.Errorf("outdoor_station = %v, want the explicit 5 from config", byID["outdoor_station"])
 	}
-	if len(byID["climate_basement"]) != len(climate.FieldNames()) {
-		t.Errorf("basement should fall back to the full registry, got %v", byID["climate_basement"])
+	if len(byID["sensor_a"]) != len(climate.FieldNames()) {
+		t.Errorf("sensor_a should fall back to the full registry, got %v", byID["sensor_a"])
 	}
 }
 
@@ -243,9 +256,9 @@ func TestFields(t *testing.T) {
 func TestDeviceSeries_DefaultsTemperatureMean(t *testing.T) {
 	s, q := dataSetup(t)
 	q.Responses = map[string][]influx.Row{
-		`"climate_basement"`: bucketRows(t, s, "climate_basement", "today", "1h", 19.5),
+		`"sensor_a"`: bucketRows(t, s, "sensor_a", "today", "1h", 19.5),
 	}
-	w := doGET(t, s, "/devices/climate_basement/series?window=today&interval=1h")
+	w := doGET(t, s, "/devices/sensor_a/series?window=today&interval=1h")
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -279,7 +292,7 @@ func TestDeviceSeries_UnknownDevice(t *testing.T) {
 
 func TestDeviceSeries_NonClimateDevice(t *testing.T) {
 	s, _ := dataSetup(t)
-	w := doGET(t, s, "/devices/winefridge/series")
+	w := doGET(t, s, "/devices/plug_a/series")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d: %s", w.Code, w.Body.String())
 	}
@@ -290,7 +303,7 @@ func TestDeviceSeries_NonClimateDevice(t *testing.T) {
 
 func TestDeviceSeries_UnknownField(t *testing.T) {
 	s, _ := dataSetup(t)
-	w := doGET(t, s, "/devices/climate_basement/series?field=co2_ppm")
+	w := doGET(t, s, "/devices/sensor_a/series?field=co2_ppm")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d: %s", w.Code, w.Body.String())
 	}
@@ -298,7 +311,7 @@ func TestDeviceSeries_UnknownField(t *testing.T) {
 
 func TestDeviceSeries_InvalidFn(t *testing.T) {
 	s, _ := dataSetup(t)
-	w := doGET(t, s, "/devices/climate_basement/series?fn=sum")
+	w := doGET(t, s, "/devices/sensor_a/series?fn=sum")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400 (sum is non-additive-forbidden), got %d: %s", w.Code, w.Body.String())
 	}
@@ -306,7 +319,7 @@ func TestDeviceSeries_InvalidFn(t *testing.T) {
 
 func TestDeviceSeries_BadWindow(t *testing.T) {
 	s, _ := dataSetup(t)
-	w := doGET(t, s, "/devices/climate_basement/series?window=fortnight")
+	w := doGET(t, s, "/devices/sensor_a/series?window=fortnight")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d: %s", w.Code, w.Body.String())
 	}
@@ -315,9 +328,9 @@ func TestDeviceSeries_BadWindow(t *testing.T) {
 func TestDeviceSeries_Rows(t *testing.T) {
 	s, q := dataSetup(t)
 	q.Responses = map[string][]influx.Row{
-		`"climate_basement"`: bucketRows(t, s, "climate_basement", "today", "1h", 20),
+		`"sensor_a"`: bucketRows(t, s, "sensor_a", "today", "1h", 20),
 	}
-	w := doGET(t, s, "/devices/climate_basement/series?window=today&interval=1h&shape=rows")
+	w := doGET(t, s, "/devices/sensor_a/series?window=today&interval=1h&shape=rows")
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -333,7 +346,7 @@ func TestDeviceSeries_Rows(t *testing.T) {
 func TestDeviceSeries_InfluxError(t *testing.T) {
 	s, q := dataSetup(t)
 	q.Err = errFake
-	w := doGET(t, s, "/devices/climate_basement/series")
+	w := doGET(t, s, "/devices/sensor_a/series")
 	if w.Code != http.StatusBadGateway {
 		t.Fatalf("want 502, got %d: %s", w.Code, w.Body.String())
 	}
@@ -347,7 +360,7 @@ func TestDeviceSeries_InfluxError(t *testing.T) {
 func TestDeviceSeries_WindDirCircular(t *testing.T) {
 	for _, fn := range []string{"mean", "min", "max"} {
 		s, _ := dataSetup(t)
-		w := doGET(t, s, "/devices/climate_weatherstation/series?field=wind_dir_deg&fn="+fn)
+		w := doGET(t, s, "/devices/outdoor_station/series?field=wind_dir_deg&fn="+fn)
 		if w.Code != http.StatusBadRequest {
 			t.Fatalf("fn=%s on circular field: want 400, got %d: %s", fn, w.Code, w.Body.String())
 		}
@@ -355,7 +368,7 @@ func TestDeviceSeries_WindDirCircular(t *testing.T) {
 
 	s, q := dataSetup(t)
 	q.QueryFunc = func(string) ([]influx.Row, error) { return nil, nil }
-	w := doGET(t, s, "/devices/climate_weatherstation/series?field=wind_dir_deg&window=today&interval=1h")
+	w := doGET(t, s, "/devices/outdoor_station/series?field=wind_dir_deg&window=today&interval=1h")
 	if w.Code != http.StatusOK {
 		t.Fatalf("default wind_dir_deg request should resolve, got %d: %s", w.Code, w.Body.String())
 	}
@@ -368,16 +381,16 @@ func TestDeviceSeries_WindDirCircular(t *testing.T) {
 
 func TestSeries_GroupByRoomMean(t *testing.T) {
 	s, q := dataSetup(t)
-	// Two sensors in the same room (office) to prove mean-not-sum end to end.
+	// Two sensors in the same room to prove mean-not-sum end to end.
 	devs := testDevices()
-	devs["glowsensorth1"] = config.DeviceConfig{Class: "environmental_sensor", Location: "office", DisplayName: "Glow"}
-	devs["climate_office"] = config.DeviceConfig{Class: "environmental_sensor", Location: "office", DisplayName: "Office"}
+	devs["probe_a"] = config.DeviceConfig{Class: "environmental_sensor", Location: "area-d", DisplayName: "Glow"}
+	devs["sensor_d"] = config.DeviceConfig{Class: "environmental_sensor", Location: "area-d", DisplayName: "Sensor D"}
 	s.Config = fakeConfig{devices: devs}
 
-	// All devices share one flux (fan-out); return rows for two office members
+	// All devices share one flux (fan-out); return rows for the two members of that room
 	// with different values per bucket: 20 and 30 → mean 25.
-	rowsA := bucketRows(t, s, "glowsensorth1", "today", "1h", 20)
-	rowsB := bucketRows(t, s, "climate_office", "today", "1h", 30)
+	rowsA := bucketRows(t, s, "probe_a", "today", "1h", 20)
+	rowsB := bucketRows(t, s, "sensor_d", "today", "1h", 30)
 	q.QueryFunc = func(flux string) ([]influx.Row, error) {
 		return append(append([]influx.Row{}, rowsA...), rowsB...), nil
 	}
@@ -399,20 +412,20 @@ func TestSeries_GroupByRoomMean(t *testing.T) {
 	if resp.GroupBy != "room" {
 		t.Errorf("group_by = %q", resp.GroupBy)
 	}
-	var office *struct {
+	var shared *struct {
 		Key    string    `json:"key"`
 		Values []float64 `json:"values"`
 	}
 	for i := range resp.Series {
-		if resp.Series[i].Key == "office" {
-			office = &resp.Series[i]
+		if resp.Series[i].Key == "area-d" {
+			shared = &resp.Series[i]
 		}
 	}
-	if office == nil {
-		t.Fatalf("office series missing: %+v", resp.Series)
+	if shared == nil {
+		t.Fatalf("shared-room series missing: %+v", resp.Series)
 	}
-	if !approx(office.Values[0], 25) {
-		t.Errorf("office bucket 0 = %v, want 25 (mean of 20 and 30, NOT sum 50)", office.Values[0])
+	if !approx(shared.Values[0], 25) {
+		t.Errorf("shared-room bucket 0 = %v, want 25 (mean of 20 and 30, NOT sum 50)", shared.Values[0])
 	}
 }
 
@@ -442,9 +455,9 @@ func TestSeries_NoFilterAllClimate(t *testing.T) {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
 	// Every climate device present — including the fire alarm, which is charted
-	// like any other. Non-climate winefridge excluded.
+	// like any other. Non-climate plug_a excluded.
 	keys := seriesKeys(t, w)
-	want := []string{"climate_basement", "climate_weatherstation", "firealarm_utility"}
+	want := []string{"alarm_a", "outdoor_station", "sensor_a"}
 	if len(keys) != len(want) {
 		t.Fatalf("want %d climate series, got %d: %v", len(want), len(keys), keys)
 	}
@@ -466,14 +479,14 @@ func TestSeries_NoFilterAllClimate(t *testing.T) {
 func TestDeviceSeries_UnreportedField400(t *testing.T) {
 	s, _ := dataSetup(t)
 	// The fire alarm declares temperature_c only.
-	w := doGET(t, s, "/devices/firealarm_utility/series?field=humidity_pct")
+	w := doGET(t, s, "/devices/alarm_a/series?field=humidity_pct")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d: %s", w.Code, w.Body.String())
 	}
 	// The error names both the field and what the device does report, so a
 	// consumer can correct the request without a second round trip.
 	body := w.Body.String()
-	for _, want := range []string{"humidity_pct", "temperature_c", "firealarm_utility"} {
+	for _, want := range []string{"humidity_pct", "temperature_c", "alarm_a"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("error should mention %q, got %s", want, body)
 		}
@@ -485,8 +498,8 @@ func TestDeviceSeries_UnreportedField400(t *testing.T) {
 func TestDeviceSeries_UndeclaredCoverageStillAllowed(t *testing.T) {
 	s, q := dataSetup(t)
 	q.QueryFunc = func(flux string) ([]influx.Row, error) { return nil, nil }
-	// climate_basement declares no environment_fields.
-	w := doGET(t, s, "/devices/climate_basement/series?window=today&interval=1h&field=rainfall_mm")
+	// sensor_a declares no environment_fields.
+	w := doGET(t, s, "/devices/sensor_a/series?window=today&interval=1h&field=rainfall_mm")
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200 (unknown coverage must not 400), got %d: %s", w.Code, w.Body.String())
 	}
@@ -496,9 +509,9 @@ func TestDeviceSeries_UndeclaredCoverageStillAllowed(t *testing.T) {
 func TestDeviceSeries_DeclaredFieldAllowed(t *testing.T) {
 	s, q := dataSetup(t)
 	q.QueryFunc = func(flux string) ([]influx.Row, error) {
-		return bucketRows(t, s, "firealarm_utility", "today", "1h", 20.2), nil
+		return bucketRows(t, s, "alarm_a", "today", "1h", 20.2), nil
 	}
-	w := doGET(t, s, "/devices/firealarm_utility/series?window=today&interval=1h&field=temperature_c")
+	w := doGET(t, s, "/devices/alarm_a/series?window=today&interval=1h&field=temperature_c")
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -506,21 +519,21 @@ func TestDeviceSeries_DeclaredFieldAllowed(t *testing.T) {
 
 // /series drops devices that cannot report the field rather than padding the
 // response with all-null lines. The weather station declares pressure_hpa; the
-// fire alarm declares temperature_c only; the basement declares nothing and so
+// fire alarm declares temperature_c only; sensor_a declares nothing and so
 // is kept (unknown coverage).
 func TestSeries_OmitsDevicesThatCannotReportField(t *testing.T) {
 	s, q := dataSetup(t)
 	q.QueryFunc = func(flux string) ([]influx.Row, error) {
-		return bucketRows(t, s, "climate_weatherstation", "today", "1h", 1008.5), nil
+		return bucketRows(t, s, "outdoor_station", "today", "1h", 1008.5), nil
 	}
 	w := doGET(t, s, "/series?window=today&interval=1h&field=pressure_hpa")
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
 	keys := seriesKeys(t, w)
-	want := []string{"climate_basement", "climate_weatherstation"}
+	want := []string{"outdoor_station", "sensor_a"}
 	if len(keys) != len(want) {
-		t.Fatalf("want %v (firealarm_utility omitted: declares temperature_c only), got %v", want, keys)
+		t.Fatalf("want %v (alarm_a omitted: declares temperature_c only), got %v", want, keys)
 	}
 	for i := range want {
 		if keys[i] != want[i] {
@@ -534,7 +547,7 @@ func TestSeries_OmitsDevicesThatCannotReportField(t *testing.T) {
 func TestSeries_AllDevicesOmittedIsEmpty200(t *testing.T) {
 	s, q := dataSetup(t)
 	q.QueryFunc = func(flux string) ([]influx.Row, error) { return nil, nil }
-	w := doGET(t, s, "/series?window=today&interval=1h&field=uv_index&devices=firealarm_utility")
+	w := doGET(t, s, "/series?window=today&interval=1h&field=uv_index&devices=alarm_a")
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -545,7 +558,7 @@ func TestSeries_AllDevicesOmittedIsEmpty200(t *testing.T) {
 
 // --- fire_alarm as a climate device (option A: class allowlist) ---
 //
-// These pin the behaviour that makes office/utility visible at all. Before the
+// These pin the behaviour that makes such rooms visible at all. Before the
 // fire_alarm class was charted, every one of these was a 400 or an omission.
 
 // A room whose only environment-reporting device is a fire alarm is reachable
@@ -554,15 +567,15 @@ func TestSeries_AllDevicesOmittedIsEmpty200(t *testing.T) {
 func TestSeries_RoomsFilter_FireAlarmOnlyRoom(t *testing.T) {
 	s, q := dataSetup(t)
 	q.QueryFunc = func(flux string) ([]influx.Row, error) {
-		return bucketRows(t, s, "firealarm_utility", "today", "1h", 20.21), nil
+		return bucketRows(t, s, "alarm_a", "today", "1h", 20.21), nil
 	}
-	w := doGET(t, s, "/series?window=today&interval=1h&rooms=utility")
+	w := doGET(t, s, "/series?window=today&interval=1h&rooms=area-c")
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
 	keys := seriesKeys(t, w)
-	if len(keys) != 1 || keys[0] != "firealarm_utility" {
-		t.Fatalf("want only firealarm_utility, got %v", keys)
+	if len(keys) != 1 || keys[0] != "alarm_a" {
+		t.Fatalf("want only alarm_a, got %v", keys)
 	}
 }
 
@@ -570,15 +583,15 @@ func TestSeries_RoomsFilter_FireAlarmOnlyRoom(t *testing.T) {
 func TestSeries_DevicesFilter_AcceptsFireAlarm(t *testing.T) {
 	s, q := dataSetup(t)
 	q.QueryFunc = func(flux string) ([]influx.Row, error) {
-		return bucketRows(t, s, "firealarm_utility", "today", "1h", 20.21), nil
+		return bucketRows(t, s, "alarm_a", "today", "1h", 20.21), nil
 	}
-	w := doGET(t, s, "/series?window=today&interval=1h&devices=firealarm_utility")
+	w := doGET(t, s, "/series?window=today&interval=1h&devices=alarm_a")
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
 	keys := seriesKeys(t, w)
-	if len(keys) != 1 || keys[0] != "firealarm_utility" {
-		t.Fatalf("want only firealarm_utility, got %v", keys)
+	if len(keys) != 1 || keys[0] != "alarm_a" {
+		t.Fatalf("want only alarm_a, got %v", keys)
 	}
 }
 
@@ -586,15 +599,15 @@ func TestSeries_DevicesFilter_AcceptsFireAlarm(t *testing.T) {
 func TestDeviceSeries_FireAlarm(t *testing.T) {
 	s, q := dataSetup(t)
 	q.Responses = map[string][]influx.Row{
-		`"firealarm_utility"`: bucketRows(t, s, "firealarm_utility", "today", "1h", 20.21),
+		`"alarm_a"`: bucketRows(t, s, "alarm_a", "today", "1h", 20.21),
 	}
-	w := doGET(t, s, "/devices/firealarm_utility/series?window=today&interval=1h")
+	w := doGET(t, s, "/devices/alarm_a/series?window=today&interval=1h")
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
 	keys := seriesKeys(t, w)
-	if len(keys) != 1 || keys[0] != "firealarm_utility" {
-		t.Fatalf("want one firealarm_utility series, got %v", keys)
+	if len(keys) != 1 || keys[0] != "alarm_a" {
+		t.Fatalf("want one alarm_a series, got %v", keys)
 	}
 }
 
@@ -604,10 +617,10 @@ func TestDeviceLatest_FireAlarm(t *testing.T) {
 	now := s.Clock.Now()
 	q.QueryFunc = func(flux string) ([]influx.Row, error) {
 		return []influx.Row{
-			{DeviceID: "firealarm_utility", Field: "temperature_c", Value: 20.21, HasValue: true, Time: now},
+			{DeviceID: "alarm_a", Field: "temperature_c", Value: 20.21, HasValue: true, Time: now},
 		}, nil
 	}
-	w := doGET(t, s, "/devices/firealarm_utility/latest")
+	w := doGET(t, s, "/devices/alarm_a/latest")
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -633,9 +646,9 @@ func TestDeviceLatest_FireAlarm(t *testing.T) {
 func TestSeries_NonClimateStillRejected(t *testing.T) {
 	s, _ := dataSetup(t)
 	for _, path := range []string{
-		"/series?devices=winefridge",
-		"/devices/winefridge/series",
-		"/devices/winefridge/latest",
+		"/series?devices=plug_a",
+		"/devices/plug_a/series",
+		"/devices/plug_a/latest",
 	} {
 		w := doGET(t, s, path)
 		if w.Code != http.StatusBadRequest {
@@ -647,47 +660,47 @@ func TestSeries_NonClimateStillRejected(t *testing.T) {
 func TestSeries_DevicesFilter(t *testing.T) {
 	s, q := dataSetup(t)
 	q.QueryFunc = func(flux string) ([]influx.Row, error) {
-		return bucketRows(t, s, "climate_basement", "today", "1h", 19), nil
+		return bucketRows(t, s, "sensor_a", "today", "1h", 19), nil
 	}
-	w := doGET(t, s, "/series?window=today&interval=1h&devices=climate_basement")
+	w := doGET(t, s, "/series?window=today&interval=1h&devices=sensor_a")
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
 	keys := seriesKeys(t, w)
-	if len(keys) != 1 || keys[0] != "climate_basement" {
-		t.Fatalf("want only climate_basement, got %v", keys)
+	if len(keys) != 1 || keys[0] != "sensor_a" {
+		t.Fatalf("want only sensor_a, got %v", keys)
 	}
 }
 
 func TestSeries_RoomsFilter(t *testing.T) {
 	s, q := dataSetup(t)
 	q.QueryFunc = func(flux string) ([]influx.Row, error) {
-		return bucketRows(t, s, "climate_weatherstation", "today", "1h", 15), nil
+		return bucketRows(t, s, "outdoor_station", "today", "1h", 15), nil
 	}
-	w := doGET(t, s, "/series?window=today&interval=1h&rooms=garden")
+	w := doGET(t, s, "/series?window=today&interval=1h&rooms=area-b")
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
 	keys := seriesKeys(t, w)
-	if len(keys) != 1 || keys[0] != "climate_weatherstation" {
-		t.Fatalf("want only climate_weatherstation (garden), got %v", keys)
+	if len(keys) != 1 || keys[0] != "outdoor_station" {
+		t.Fatalf("want only outdoor_station (area-b), got %v", keys)
 	}
 }
 
 func TestSeries_FiltersComposeAND(t *testing.T) {
 	s, q := dataSetup(t)
 	q.QueryFunc = func(flux string) ([]influx.Row, error) {
-		return bucketRows(t, s, "climate_weatherstation", "today", "1h", 15), nil
+		return bucketRows(t, s, "outdoor_station", "today", "1h", 15), nil
 	}
-	// Both climate devices requested, but only the garden one survives the
+	// Both climate devices requested, but only the area-b one survives the
 	// location filter — devices= and rooms= compose as AND.
-	w := doGET(t, s, "/series?window=today&interval=1h&devices=climate_basement,climate_weatherstation&rooms=garden")
+	w := doGET(t, s, "/series?window=today&interval=1h&devices=sensor_a,outdoor_station&rooms=area-b")
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
 	keys := seriesKeys(t, w)
-	if len(keys) != 1 || keys[0] != "climate_weatherstation" {
-		t.Fatalf("want only climate_weatherstation, got %v", keys)
+	if len(keys) != 1 || keys[0] != "outdoor_station" {
+		t.Fatalf("want only outdoor_station, got %v", keys)
 	}
 }
 
@@ -701,8 +714,8 @@ func TestSeries_UnknownDeviceFilter(t *testing.T) {
 
 func TestSeries_NonClimateDeviceFilter(t *testing.T) {
 	s, _ := dataSetup(t)
-	// winefridge exists but is a non-climate device — not chartable.
-	w := doGET(t, s, "/series?devices=winefridge")
+	// plug_a exists but is a non-climate device — not chartable.
+	w := doGET(t, s, "/series?devices=plug_a")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400 for non-climate device, got %d: %s", w.Code, w.Body.String())
 	}
@@ -710,9 +723,9 @@ func TestSeries_NonClimateDeviceFilter(t *testing.T) {
 
 func TestSeries_UnknownRoomFilter(t *testing.T) {
 	s, _ := dataSetup(t)
-	// kitchen holds only winefridge (non-climate), so as far as the climate API
+	// area-e holds only plug_a (non-climate), so as far as the climate API
 	// is concerned the location does not exist → 400, not a silent empty series.
-	w := doGET(t, s, "/series?rooms=kitchen")
+	w := doGET(t, s, "/series?rooms=area-e")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400 for climate-free location, got %d: %s", w.Code, w.Body.String())
 	}
@@ -721,7 +734,7 @@ func TestSeries_UnknownRoomFilter(t *testing.T) {
 func TestSeries_RollingWindow7d(t *testing.T) {
 	s, q := dataSetup(t)
 	q.QueryFunc = func(flux string) ([]influx.Row, error) { return nil, nil }
-	w := doGET(t, s, "/series?window=7d&devices=climate_basement")
+	w := doGET(t, s, "/series?window=7d&devices=sensor_a")
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -822,15 +835,15 @@ func TestDeviceLatest(t *testing.T) {
 	now := time.Date(2026, 6, 11, 12, 0, 0, 0, time.UTC)
 	q.QueryFunc = func(flux string) ([]influx.Row, error) {
 		return []influx.Row{
-			{DeviceID: "climate_weatherstation", Field: "temperature_c", Value: 21.456, HasValue: true, Time: now},
-			{DeviceID: "climate_weatherstation", Field: "humidity_pct", Value: 55.2, HasValue: true, Time: now},
+			{DeviceID: "outdoor_station", Field: "temperature_c", Value: 21.456, HasValue: true, Time: now},
+			{DeviceID: "outdoor_station", Field: "humidity_pct", Value: 55.2, HasValue: true, Time: now},
 			// Unknown field is skipped.
-			{DeviceID: "climate_weatherstation", Field: "co2_ppm", Value: 400, HasValue: true, Time: now},
+			{DeviceID: "outdoor_station", Field: "co2_ppm", Value: 400, HasValue: true, Time: now},
 			// Empty value skipped.
-			{DeviceID: "climate_weatherstation", Field: "pressure_hpa", HasValue: false, Time: now},
+			{DeviceID: "outdoor_station", Field: "pressure_hpa", HasValue: false, Time: now},
 		}, nil
 	}
-	w := doGET(t, s, "/devices/climate_weatherstation/latest")
+	w := doGET(t, s, "/devices/outdoor_station/latest")
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -845,7 +858,7 @@ func TestDeviceLatest(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.DeviceID != "climate_weatherstation" {
+	if resp.DeviceID != "outdoor_station" {
 		t.Errorf("device_id = %q", resp.DeviceID)
 	}
 	// temperature_c + humidity_pct (co2 unknown, pressure empty both dropped).
@@ -870,7 +883,7 @@ func TestDeviceLatest(t *testing.T) {
 
 func TestDeviceLatest_NonClimate(t *testing.T) {
 	s, _ := dataSetup(t)
-	w := doGET(t, s, "/devices/winefridge/latest")
+	w := doGET(t, s, "/devices/plug_a/latest")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d", w.Code)
 	}

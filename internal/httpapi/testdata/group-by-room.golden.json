@@ -22,36 +22,12 @@
   "interval": "1h",
   "series": [
     {
-      "key": "basement.garden",
-      "label": "basement.garden",
-      "max": null,
-      "mean": null,
-      "min": null,
-      "room": "basement.garden",
-      "values": [
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null
-      ]
-    },
-    {
-      "key": "basement.hallway",
-      "label": "basement.hallway",
+      "key": "floor1.room-a",
+      "label": "floor1.room-a",
       "max": 20,
       "mean": 20,
       "min": 20,
-      "room": "basement.hallway",
+      "room": "floor1.room-a",
       "values": [
         20,
         20,
@@ -70,12 +46,36 @@
       ]
     },
     {
-      "key": "basement.utility",
-      "label": "basement.utility",
+      "key": "floor1.room-b",
+      "label": "floor1.room-b",
       "max": null,
       "mean": null,
       "min": null,
-      "room": "basement.utility",
+      "room": "floor1.room-b",
+      "values": [
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ]
+    },
+    {
+      "key": "floor1.room-c",
+      "label": "floor1.room-c",
+      "max": null,
+      "mean": null,
+      "min": null,
+      "room": "floor1.room-c",
       "values": [
         null,
         null,

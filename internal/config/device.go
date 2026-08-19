@@ -39,8 +39,20 @@ type DeviceConfig struct {
 	Thresholds  *Thresholds `yaml:"thresholds"       json:"thresholds,omitempty"`
 
 	// Room is the floorplan room id this device sits in, e.g.
-	// "groundfloor.kitchen". It replaces Location.
+	// "floor2.room-a". It replaces Location.
 	Room string `yaml:"room" json:"room,omitempty"`
+
+	// Floor is the floor this device sits on, e.g. "floor2". The devices
+	// namespace declares it as a first-class property alongside Room, so
+	// greenhouse reads it rather than deriving it from the room id: the
+	// floorplan owns the fact, and re-deriving it here would be a second
+	// implementation of someone else's taxonomy that silently disagrees the
+	// moment a room id is spelled unexpectedly.
+	//
+	// Empty means the namespace did not declare one, which greenhouse treats as
+	// UNKNOWN rather than guessing: an undeclared floor is never matched by the
+	// floors= filter and is reported as "" by the device catalog.
+	Floor string `yaml:"floor" json:"floor,omitempty"`
 
 	// Location is the free-text place the device used to declare, and is
 	// DEPRECATED. It conflated at least five different things — a floor, a room,
@@ -77,7 +89,7 @@ type DeviceConfig struct {
 // greenhouse therefore charts.
 //
 // `fire_alarm` is here because the three installed alarms each write
-// temperature_c alongside their smoke state — and crucially, office and utility
+// temperature_c alongside their smoke state — and crucially, some rooms
 // hold NO environmental_sensor at all, so without them those two rooms have no
 // climate coverage despite live data sitting in Influx.
 //
@@ -135,7 +147,7 @@ const CoverageHouse = "house"
 // ReportsEnvironment reports whether greenhouse charts this device — i.e.
 // whether its class writes to the `device_environment` measurement. It is the
 // single predicate behind the device catalog, the series device set, and the
-// devices=/rooms= filters.
+// devices=/rooms=/floors= filters.
 func (d DeviceConfig) ReportsEnvironment() bool {
 	_, ok := climateClasses[d.Class]
 	return ok

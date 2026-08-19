@@ -23,7 +23,7 @@ func sampleResponse() SeriesResponse {
 		Shape:    ShapeColumns,
 		Buckets:  buckets,
 		Series: []Series{
-			{Key: "climate_basement", Label: "Basement", Room: "basement",
+			{Key: "sensor_a", Label: "Sensor A", Room: "area-a",
 				Values: []float64{18, math.NaN(), 20}, Min: 18, Max: 20, Mean: 19},
 		},
 	}
@@ -47,7 +47,7 @@ func TestRows_Reshape(t *testing.T) {
 	if len(rows.Rows) != 3 {
 		t.Fatalf("want 3 rows, got %d", len(rows.Rows))
 	}
-	if rows.Rows[0].Value != 18 || rows.Rows[0].Key != "climate_basement" {
+	if rows.Rows[0].Value != 18 || rows.Rows[0].Key != "sensor_a" {
 		t.Errorf("row 0 = %+v", rows.Rows[0])
 	}
 	if !rows.Rows[0].Time.Equal(resp.Buckets[0]) {

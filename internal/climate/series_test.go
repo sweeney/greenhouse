@@ -14,13 +14,13 @@ import (
 
 func envDevices() map[string]config.DeviceConfig {
 	return map[string]config.DeviceConfig{
-		"climate_basement":    {Class: "environmental_sensor", Location: "basement", DisplayName: "Basement"},
-		"climate_groundfloor": {Class: "environmental_sensor", Location: "groundfloor", DisplayName: "Ground Floor"},
-		// Two sensors share the "office" location so group_by=location must mean them.
-		"glowsensorth1":  {Class: "environmental_sensor", Location: "office", DisplayName: "Glow Sensor"},
-		"climate_office": {Class: "environmental_sensor", Location: "office", DisplayName: "Office"},
+		"sensor_a": {Class: "environmental_sensor", Location: "area-a", DisplayName: "Sensor A"},
+		"sensor_b": {Class: "environmental_sensor", Location: "area-b", DisplayName: "Sensor B"},
+		// Two sensors share the "area-d" location so group_by=location must mean them.
+		"probe_a":  {Class: "environmental_sensor", Location: "area-d", DisplayName: "Probe A"},
+		"sensor_d": {Class: "environmental_sensor", Location: "area-d", DisplayName: "Sensor D"},
 		// A non-environmental device must be ignored entirely.
-		"winefridge": {Class: "continuous_power_device", Location: "kitchen", DisplayName: "Wine Fridge"},
+		"plug_a": {Class: "continuous_power_device", Location: "area-e", DisplayName: "Plug A"},
 	}
 }
 
@@ -35,32 +35,37 @@ func TestAssembleSeries_ByDevice(t *testing.T) {
 	}
 	devices := envDevices()
 	v := vals(map[string][]float64{
-		"climate_basement":    {18, 19, 20},
-		"climate_groundfloor": {21, 22, 23},
-		"glowsensorth1":       {25, 26, 27},
-		"climate_office":      {30, 31, 32},
+		"sensor_a": {18, 19, 20},
+		"sensor_b": {21, 22, 23},
+		"probe_a":  {25, 26, 27},
+		"sensor_d": {30, 31, 32},
 	})
 
 	got := AssembleSeries(buckets, devices, v, GroupByDevice)
-	// 4 environmental devices, winefridge excluded; sorted by id.
+	// 4 environmental devices, plug_a excluded; sorted by id.
 	if len(got) != 4 {
 		t.Fatalf("want 4 device series, got %d", len(got))
 	}
-	wantKeys := []string{"climate_basement", "climate_groundfloor", "climate_office", "glowsensorth1"}
+	wantKeys := []string{"probe_a", "sensor_a", "sensor_b", "sensor_d"}
 	for i, k := range wantKeys {
 		if got[i].Key != k {
 			t.Errorf("series[%d].Key = %q, want %q", i, got[i].Key, k)
 		}
 	}
-	if got[0].Values[0] != 18 || got[0].Values[2] != 20 {
-		t.Errorf("basement values = %v", got[0].Values)
+	byKey := map[string]Series{}
+	for _, s := range got {
+		byKey[s.Key] = s
 	}
-	if got[0].Room != "basement" {
-		t.Errorf("basement room = %q", got[0].Room)
+	a := byKey["sensor_a"]
+	if a.Values[0] != 18 || a.Values[2] != 20 {
+		t.Errorf("sensor_a values = %v", a.Values)
+	}
+	if a.Room != "area-a" {
+		t.Errorf("sensor_a room = %q", a.Room)
 	}
 	// Summary stats.
-	if got[0].Min != 18 || got[0].Max != 20 || got[0].Mean != 19 {
-		t.Errorf("basement stats min/max/mean = %v/%v/%v", got[0].Min, got[0].Max, got[0].Mean)
+	if a.Min != 18 || a.Max != 20 || a.Mean != 19 {
+		t.Errorf("sensor_a stats min/max/mean = %v/%v/%v", a.Min, a.Max, a.Mean)
 	}
 }
 
@@ -75,32 +80,32 @@ func TestAssembleSeries_ByRoomMeansNotSums(t *testing.T) {
 	}
 	devices := envDevices()
 	v := vals(map[string][]float64{
-		"climate_basement":    {18, 19},
-		"climate_groundfloor": {21, 22},
-		"glowsensorth1":       {20, 30}, // office member A
-		"climate_office":      {30, 10}, // office member B
+		"sensor_a": {18, 19},
+		"sensor_b": {21, 22},
+		"probe_a":  {20, 30}, // room member A
+		"sensor_d": {30, 10}, // room member B
 	})
 
 	got := AssembleSeries(buckets, devices, v, GroupByRoom)
-	// Locations: basement, groundfloor, office (sorted).
+	// Locations: area-a, area-b, area-d (sorted).
 	byKey := map[string]Series{}
 	for _, s := range got {
 		byKey[s.Key] = s
 	}
-	office, ok := byKey["office"]
+	shared, ok := byKey["area-d"]
 	if !ok {
-		t.Fatalf("office location series missing: %+v", got)
+		t.Fatalf("shared-room location series missing: %+v", got)
 	}
 	// MEAN: (20+30)/2 = 25 ; (30+10)/2 = 20. A SUM would give 50 and 40.
-	if office.Values[0] != 25 || office.Values[1] != 20 {
-		t.Errorf("office mean values = %v, want [25 20] (mean, NOT sum)", office.Values)
+	if shared.Values[0] != 25 || shared.Values[1] != 20 {
+		t.Errorf("shared-room mean values = %v, want [25 20] (mean, NOT sum)", shared.Values)
 	}
-	if office.Values[0] == 50 || office.Values[1] == 40 {
-		t.Fatal("office is summing readings — must be mean")
+	if shared.Values[0] == 50 || shared.Values[1] == 40 {
+		t.Fatal("the shared room is summing readings — must be mean")
 	}
 	// Single-member rooms pass through unchanged.
-	if byKey["basement"].Values[0] != 18 {
-		t.Errorf("basement value = %v, want 18", byKey["basement"].Values[0])
+	if byKey["area-a"].Values[0] != 18 {
+		t.Errorf("sensor_a value = %v, want 18", byKey["area-a"].Values[0])
 	}
 }
 
@@ -111,10 +116,10 @@ func TestAssembleSeries_GapsArePreserved(t *testing.T) {
 		buckets[i] = base.Add(time.Duration(i) * time.Hour)
 	}
 	devices := map[string]config.DeviceConfig{
-		"climate_basement": {Class: "environmental_sensor", Location: "basement"},
+		"sensor_a": {Class: "environmental_sensor", Location: "area-a"},
 	}
 	v := vals(map[string][]float64{
-		"climate_basement": {18, math.NaN(), 20},
+		"sensor_a": {18, math.NaN(), 20},
 	})
 	got := AssembleSeries(buckets, devices, v, GroupByDevice)
 	if len(got) != 1 {
@@ -179,7 +184,7 @@ func TestBuildSeries_SingleDeviceMeanField(t *testing.T) {
 	buckets := BucketStarts(win, iv, loc)
 
 	devices := map[string]config.DeviceConfig{
-		"climate_basement": {Class: "environmental_sensor", Location: "basement", DisplayName: "Basement"},
+		"sensor_a": {Class: "environmental_sensor", Location: "area-a", DisplayName: "Sensor A"},
 	}
 	temps := make([]float64, len(buckets))
 	for i := range temps {
@@ -188,7 +193,7 @@ func TestBuildSeries_SingleDeviceMeanField(t *testing.T) {
 	q := &influx.FakeQuerier{
 		PingOK: true,
 		Responses: map[string][]influx.Row{
-			`"climate_basement"`: bucketedRows("climate_basement", buckets, temps),
+			`"sensor_a"`: bucketedRows("sensor_a", buckets, temps),
 		},
 	}
 
@@ -227,7 +232,7 @@ func TestBuildSeries_FnPassThrough(t *testing.T) {
 	win, _ := ResolveWindow(now, loc, WindowToday, time.Time{}, time.Time{})
 	iv, _ := ResolveInterval(win, "1h", loc)
 	devices := map[string]config.DeviceConfig{
-		"climate_basement": {Class: "environmental_sensor"},
+		"sensor_a": {Class: "environmental_sensor"},
 	}
 	for _, fn := range []string{"min", "max", "last"} {
 		q := &influx.FakeQuerier{PingOK: true}
@@ -286,7 +291,7 @@ func TestBuildSeries_QueryError(t *testing.T) {
 	now := time.Date(2026, 6, 11, 3, 0, 0, 0, time.UTC)
 	win, _ := ResolveWindow(now, loc, WindowToday, time.Time{}, time.Time{})
 	iv, _ := ResolveInterval(win, "1h", loc)
-	devices := map[string]config.DeviceConfig{"climate_basement": {Class: "environmental_sensor"}}
+	devices := map[string]config.DeviceConfig{"sensor_a": {Class: "environmental_sensor"}}
 	q := &influx.FakeQuerier{Err: context.DeadlineExceeded}
 	if _, err := BuildSeries(context.Background(), q, "statehouse", win, iv, "temperature_c", "mean", GroupByDevice, devices, loc); err == nil {
 		t.Fatal("expected error from query failure")
@@ -298,7 +303,7 @@ func TestBuildSeries_NoEnvironmentalDevicesNoQuery(t *testing.T) {
 	now := time.Date(2026, 6, 11, 3, 0, 0, 0, time.UTC)
 	win, _ := ResolveWindow(now, loc, WindowToday, time.Time{}, time.Time{})
 	iv, _ := ResolveInterval(win, "1h", loc)
-	devices := map[string]config.DeviceConfig{"winefridge": {Class: "continuous_power_device"}}
+	devices := map[string]config.DeviceConfig{"plug_a": {Class: "continuous_power_device"}}
 	q := &influx.FakeQuerier{PingOK: true}
 	resp, err := BuildSeries(context.Background(), q, "statehouse", win, iv, "temperature_c", "mean", GroupByDevice, devices, loc)
 	if err != nil {
@@ -314,15 +319,15 @@ func TestBuildSeries_NoEnvironmentalDevicesNoQuery(t *testing.T) {
 
 // --- fire_alarm participation (option A: class allowlist) ---
 
-// mixedClassDevices mirrors the real network_cabinet topology: a purpose-built
+// mixedClassDevices mirrors a real mixed-class room: a purpose-built
 // sensor and a fire alarm in the SAME room, plus a fire alarm alone in a room
-// with no environmental_sensor at all (office/utility in prod).
+// with no environmental_sensor at all, which prod does have.
 func mixedClassDevices() map[string]config.DeviceConfig {
 	return map[string]config.DeviceConfig{
-		"glowsensorth1":     {Class: "environmental_sensor", Location: "network_cabinet", DisplayName: "Glow Sensor"},
-		"firealarm_network": {Class: "fire_alarm", Location: "network_cabinet", DisplayName: "Fire Alarm: Network"},
-		"firealarm_utility": {Class: "fire_alarm", Location: "utility", DisplayName: "Fire Alarm: Utility"},
-		"winefridge":        {Class: "continuous_power_device", Location: "kitchen", DisplayName: "Wine Fridge"},
+		"probe_a": {Class: "environmental_sensor", Location: "area-g", DisplayName: "Probe A"},
+		"alarm_b": {Class: "fire_alarm", Location: "area-g", DisplayName: "Alarm B"},
+		"alarm_a": {Class: "fire_alarm", Location: "area-c", DisplayName: "Alarm A"},
+		"plug_a":  {Class: "continuous_power_device", Location: "area-e", DisplayName: "Plug A"},
 	}
 }
 
@@ -331,17 +336,17 @@ func mixedClassDevices() map[string]config.DeviceConfig {
 func TestAssembleSeries_ByDevice_IncludesFireAlarms(t *testing.T) {
 	buckets := []time.Time{time.Unix(0, 0).UTC(), time.Unix(3600, 0).UTC()}
 	got := AssembleSeries(buckets, mixedClassDevices(), vals(map[string][]float64{
-		"glowsensorth1":     {22.7, 22.8},
-		"firealarm_network": {23.6, 23.5},
-		"firealarm_utility": {20.2, 20.3},
-		"winefridge":        {99, 99},
+		"probe_a": {22.7, 22.8},
+		"alarm_b": {23.6, 23.5},
+		"alarm_a": {20.2, 20.3},
+		"plug_a":  {99, 99},
 	}), GroupByDevice)
 
 	var keys []string
 	for _, s := range got {
 		keys = append(keys, s.Key)
 	}
-	want := []string{"firealarm_network", "firealarm_utility", "glowsensorth1"}
+	want := []string{"alarm_a", "alarm_b", "probe_a"}
 	if len(keys) != len(want) {
 		t.Fatalf("keys = %v, want %v", keys, want)
 	}
@@ -358,31 +363,31 @@ func TestAssembleSeries_ByDevice_IncludesFireAlarms(t *testing.T) {
 func TestAssembleSeries_ByLocation_MeansAcrossMixedClasses(t *testing.T) {
 	buckets := []time.Time{time.Unix(0, 0).UTC()}
 	got := AssembleSeries(buckets, mixedClassDevices(), vals(map[string][]float64{
-		"glowsensorth1":     {22.0},
-		"firealarm_network": {24.0},
-		"firealarm_utility": {20.0},
+		"probe_a": {22.0},
+		"alarm_b": {24.0},
+		"alarm_a": {20.0},
 	}), GroupByRoom)
 
 	byKey := map[string]Series{}
 	for _, s := range got {
 		byKey[s.Key] = s
 	}
-	cab, ok := byKey["network_cabinet"]
+	cab, ok := byKey["area-g"]
 	if !ok {
-		t.Fatalf("network_cabinet missing: %+v", got)
+		t.Fatalf("area-g missing: %+v", got)
 	}
 	if math.Abs(cab.Values[0]-23.0) > 1e-9 {
-		t.Errorf("network_cabinet = %v, want 23 (mean of 22 and 24, NOT sum 46)", cab.Values[0])
+		t.Errorf("area-g = %v, want 23 (mean of 22 and 24, NOT sum 46)", cab.Values[0])
 	}
 	// A fire-alarm-only room still yields its own location series.
-	util, ok := byKey["utility"]
+	util, ok := byKey["area-c"]
 	if !ok {
-		t.Fatalf("utility missing — a room whose only sensor is a fire alarm must still appear: %+v", got)
+		t.Fatalf("area-c missing — a room whose only sensor is a fire alarm must still appear: %+v", got)
 	}
 	if math.Abs(util.Values[0]-20.0) > 1e-9 {
-		t.Errorf("utility = %v, want 20", util.Values[0])
+		t.Errorf("area-c = %v, want 20", util.Values[0])
 	}
-	if _, leaked := byKey["kitchen"]; leaked {
-		t.Error("kitchen leaked: winefridge is not a climate device")
+	if _, leaked := byKey["area-e"]; leaked {
+		t.Error("area-e leaked: plug_a is not a climate device")
 	}
 }

@@ -34,7 +34,7 @@ requires a Bearer JWT (user **or** service token).
 |---|---|
 | `GET /healthz` | status, version, uptime, influx_reachable, remote_config status |
 | `GET /openapi.json` | the OpenAPI spec as JSON |
-| `GET /devices` | climate device catalog: id, display_name, room, class, and an `environment_fields` hint |
+| `GET /devices` | climate device catalog: id, display_name, room, floor, class, and an `environment_fields` hint |
 | `GET /devices/{id}/series` | single-device, single-field time-series |
 | `GET /series` | multi-series; `group_by` device (default) or room (mean per room) |
 | `GET /devices/{id}/latest` | the device's most recent reading across its fields (within the last 7 days) |
@@ -73,12 +73,18 @@ requires a Bearer JWT (user **or** service token).
   only `last` (and defaults to it); `mean`/`min`/`max` for it → 400.
 - `group_by` — `device` (default) \| `room`. Bad value → 400.
 - `devices` — (`/series` only) CSV of device ids to chart, e.g.
-  `devices=climate_groundfloor,climate_firstfloor`. Restricts the series to those
+  `devices=sensor_b,sensor_c`. Restricts the series to those
   sensors (omit for all climate devices). An unknown or non-climate id → 400.
+  Composes with `rooms` and `floors` as AND.
 - `rooms` — (`/series` only) CSV of floorplan room ids to chart, e.g.
-  `rooms=groundfloor.kitchen,firstfloor.drawing-room`. The candidate set is always
+  `rooms=floor2.room-a,floor3.room-a`. The candidate set is always
   climate sensors only, so a non-climate device sharing a room is never included,
-  and a room with no climate sensor → 400. Composes with `devices` as AND.
+  and a room with no climate sensor → 400. Composes with `devices` and `floors` as AND.
+- `floors` — (`/series` only) CSV of floors to chart, e.g.
+  `floors=floor1,floor2`. The coarse sibling of `rooms`: it selects every
+  climate sensor whose declared floor matches, so a caller does not have to enumerate
+  the floorplan. A floor with no climate sensor → 400, and a device whose entry
+  declares no floor is never selected. Composes with `devices` and `rooms` as AND.
 - `shape` — `columns` (default, shared buckets axis + per-series arrays) \|
   `rows` (flat one-row-per-(series,bucket)). Both carry `field`/`unit`/`fn`.
 
@@ -90,7 +96,7 @@ environmental telemetry:
 - `environmental_sensor` — the purpose-built climate sensors and the weather
   station.
 - `fire_alarm` — the installed alarms write `temperature_c` alongside their
-  smoke state. They are included because some rooms (office, utility) hold **no
+  smoke state. They are included because some rooms hold **no
   `environmental_sensor` at all**, so without them those rooms have no climate
   coverage despite live data in Influx.
 
@@ -137,7 +143,7 @@ narrows on a positive declaration.
 
 `location` used to mean two different things across these services — a geographic site
 and a room — so rooms are now `room`, sites are `site`, and floors are `floor`. Room ids
-are `<floor>.<slug>`: `groundfloor.kitchen`, `firstfloor.drawing-room`.
+are `<floor>.<slug>`: `floor2.room-a`, `floor3.room-a`.
 
 The deprecated `location` spelling has been removed: `group_by=location`, `locations=`
 and the `location` response field are all gone. Use `group_by=room`, `rooms=` and `room`.
@@ -145,6 +151,29 @@ and the `location` response field are all gone. Use `group_by=room`, `rooms=` an
 Greenhouse reads whichever the devices namespace carries. A namespace still declaring
 `location` keeps working untouched, which is what lets the namespace and its consumers
 migrate independently.
+
+`/devices` also reports a `floor` per device. The devices namespace declares `floor`
+as a **first-class property** alongside `room`, and greenhouse passes it through
+unchanged. It does **not** derive the floor from the room id: the floorplan owns that
+fact, and re-deriving it here would be a second implementation of someone else's
+taxonomy that disagrees the moment a room id is spelled unexpectedly. A device whose
+entry declares no floor is UNKNOWN — reported as `""`, and never matched by `floors=`
+— rather than guessed at.
+
+`/series` accepts `floors=` for the same vocabulary, so a floor read off the catalog
+can be handed straight back as a filter. Grouping is still `device` or `room` — there is
+no `group_by=floor` **yet**. Chart the rooms on a floor with `floors=…&group_by=room`,
+noting that `group_by=room` keys on rooms, so a device with a declared floor but no room
+id is absent from that view; `group_by=device` charts it.
+
+Floor grouping is deferred, not rejected. The objection to it — that a floor-wide mean
+averages rooms of wildly different character into a number describing nowhere — argues
+against a *hardcoded* floor mean, and `group_by=room` already applies exactly that
+hardcoded cross-member mean with no way for a caller to ask for anything else. The fix
+is one the room case needs too: a `group_fn` (`mean`/`min`/`max`, applied after `fn`)
+that lets a caller say which question they are asking, so a floor can render as a
+min–max band with the mean through it and heterogeneity shows up as the band's width.
+That is a larger change than a new filter, so it is tracked in #23.
 
 ## Config
 

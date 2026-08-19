@@ -121,13 +121,12 @@ func (s *Server) lookupDevice(w http.ResponseWriter, id string) (config.DeviceCo
 }
 
 // resolveDeviceFilter builds the climate device set a /series request should
-// chart, honouring the optional devices= and rooms= CSV query filters (locations=
-// is accepted as a deprecated alias for rooms=).
+// chart, honouring the optional devices=, rooms= and floors= CSV query filters.
 //
 // The candidate set is ALWAYS climate devices only (config.ReportsEnvironment):
 // greenhouse charts climate, so a non-climate device that happens to share a
-// room is never a candidate (class is applied before room). The two
-// filters compose as AND — a device must satisfy both to survive. With neither
+// room is never a candidate (class is applied before room and floor). The three
+// filters compose as AND — a device must satisfy all of them to survive. With no
 // filter, every climate device is returned (the prior behaviour).
 //
 // Validation writes a 400 (and returns ok=false) when:
@@ -135,9 +134,10 @@ func (s *Server) lookupDevice(w http.ResponseWriter, id string) (config.DeviceCo
 //     not a climate sensor;
 //   - rooms= names a room with no climate sensor (which includes a room holding
 //     only non-climate devices) — that room does not exist as far as the climate
-//     API is concerned, so it is an error, not an empty series.
+//     API is concerned, so it is an error, not an empty series;
+//   - floors= names a floor with no climate sensor, for the same reason.
 //
-// A valid pair of filters whose intersection is empty is NOT an error: it yields
+// A valid set of filters whose intersection is empty is NOT an error: it yields
 // an empty series list (200), consistent with a window that simply has no data.
 func (s *Server) resolveDeviceFilter(w http.ResponseWriter, r *http.Request) (map[string]config.DeviceConfig, bool) {
 	all := s.Config.Devices()
@@ -164,6 +164,11 @@ func (s *Server) resolveDeviceFilter(w http.ResponseWriter, r *http.Request) (ma
 	}
 
 	rooms := splitCSV(q.Get("rooms"))
+
+	// floors= is the coarse sibling of rooms=: a floor is the set of rooms whose
+	// declared floor matches, so `floors=floor2` saves the caller enumerating the
+	// floorplan just to chart a storey.
+	floors := splitCSV(q.Get("floors"))
 
 	// Validate requested ids against the inventory and the climate class.
 	for _, id := range ids {
@@ -194,8 +199,28 @@ func (s *Server) resolveDeviceFilter(w http.ResponseWriter, r *http.Request) (ma
 		}
 	}
 
+	// Validate requested floors against floors that hold a climate sensor. A
+	// device whose namespace entry declares no floor has an UNKNOWN floor, not a
+	// floor of its own, so it contributes nothing here and can never be selected
+	// by floors= — see config.DeviceConfig.Floor.
+	if len(floors) > 0 {
+		climateFloors := make(map[string]struct{})
+		for _, d := range candidate {
+			if f := d.Floor; f != "" {
+				climateFloors[f] = struct{}{}
+			}
+		}
+		for _, f := range floors {
+			if _, ok := climateFloors[f]; !ok {
+				writeError(w, http.StatusBadRequest, "unknown floor in 'floors': "+f)
+				return nil, false
+			}
+		}
+	}
+
 	idSet := toSet(ids)
 	roomSet := toSet(rooms)
+	floorSet := toSet(floors)
 
 	out := make(map[string]config.DeviceConfig)
 	for id, d := range candidate {
@@ -206,6 +231,11 @@ func (s *Server) resolveDeviceFilter(w http.ResponseWriter, r *http.Request) (ma
 		}
 		if roomSet != nil {
 			if _, ok := roomSet[d.Place()]; !ok {
+				continue
+			}
+		}
+		if floorSet != nil {
+			if _, ok := floorSet[d.Floor]; !ok {
 				continue
 			}
 		}
@@ -272,7 +302,11 @@ type catalogEntry struct {
 	ID          string `json:"id"`
 	DisplayName string `json:"display_name"`
 	Room        string `json:"room"`
-	Class       string `json:"class"`
+	// Floor is the floor the devices namespace declares for this device, passed
+	// through as-is. It is empty when the namespace declares none, which the
+	// catalog reports as unknown rather than guessing one from the room id.
+	Floor string `json:"floor"`
+	Class string `json:"class"`
 	// EnvironmentFields mirrors the config key of the same name: the fields
 	// this device actually writes to `device_environment`. Named to match, so
 	// the catalog and the namespace describe the same thing with one word.
@@ -282,7 +316,8 @@ type catalogEntry struct {
 // handleDevices serves GET /devices: the climate device catalog. It returns
 // every device whose class reports environmental telemetry (see
 // config.ReportsEnvironment — environmental_sensor and fire_alarm), each with
-// an `environment_fields` hint of the fields it writes.
+// its room, its declared floor, and an `environment_fields` hint of the fields
+// it writes.
 //
 // The hint comes from the device config's explicit environment_fields list when
 // present; otherwise it falls back to the full field registry. The fallback
@@ -312,6 +347,7 @@ func (s *Server) handleDevices(w http.ResponseWriter, _ *http.Request) {
 			ID:                id,
 			DisplayName:       dev.DisplayName,
 			Room:              dev.Place(),
+			Floor:             dev.Floor,
 			Class:             dev.Class,
 			EnvironmentFields: fields,
 		})

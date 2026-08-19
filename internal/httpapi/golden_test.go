@@ -25,7 +25,7 @@ func TestGoldenSeriesResponses(t *testing.T) {
 		path string
 	}{
 		{"group-by-room", "/series?window=today&interval=1h&group_by=room"},
-		{"rooms-filter", "/series?window=today&interval=1h&rooms=basement.hallway"},
+		{"rooms-filter", "/series?window=today&interval=1h&rooms=floor1.room-a"},
 	}
 
 	for _, tc := range cases {
@@ -33,7 +33,7 @@ func TestGoldenSeriesResponses(t *testing.T) {
 			s, q := dataSetup(t)
 			s.Config = fakeConfig{devices: roomDevices()}
 			q.QueryFunc = func(string) ([]influx.Row, error) {
-				return bucketRows(t, s, "climate_basement", "today", "1h", 20), nil
+				return bucketRows(t, s, "sensor_a", "today", "1h", 20), nil
 			}
 
 			got := doGET(t, s, tc.path).Body.Bytes()

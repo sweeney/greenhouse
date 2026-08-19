@@ -26,11 +26,17 @@ shapes, the Influx Querier + fake, the Server/auth/CORS/spec skeleton, the confi
   countinghouse. Climate fields are plain gauge readings.
 - **Device selection is a class allowlist**, in ONE place: `climateClasses` +
   `DeviceConfig.ReportsEnvironment()` in `internal/config/device.go`. Currently `environmental_sensor`
-  and `fire_alarm` (the alarms report `temperature_c`, and office/utility have no other sensor).
+  and `fire_alarm` (the alarms report `temperature_c`, and some rooms have no other sensor).
   Never re-introduce a per-package class const — that duplication is what this replaced. Known
   limitation, documented at the map: class asserts "every device of this class reports environment
   telemetry", so a future non-reporting model would yield an empty series until someone edits and
   deploys. The alternative (select on `environment_fields`) is a one-predicate change.
+- **Floor is config, not derivation.** The devices namespace declares `floor` as a
+  first-class property alongside `room`. `DeviceConfig.Floor` mirrors it and greenhouse
+  passes it through; never re-derive a floor from the room id's `<floor>.<slug>` shape.
+  The floorplan owns that fact, and a second implementation of it here would disagree
+  the moment a room id is spelled unexpectedly. An undeclared floor is UNKNOWN: the
+  catalog reports `""` and `floors=` never matches it.
 - **`environment_fields` is a hint, and staleness must not lose data.** It declares what a device
   writes to `device_environment`. Where declared, `/devices/{id}/series` 400s on a field the device
   does not report and `/series` omits such devices; where **undeclared**, coverage is UNKNOWN and

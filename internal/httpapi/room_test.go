@@ -19,18 +19,18 @@ import (
 // will carry after the migration.
 func roomDevices() map[string]config.DeviceConfig {
 	return map[string]config.DeviceConfig{
-		"climate_basement": {
-			Class: "environmental_sensor", Room: "basement.hallway", DisplayName: "Basement",
+		"sensor_a": {
+			Class: "environmental_sensor", Room: "floor1.room-a", DisplayName: "Sensor A",
 		},
-		"climate_weatherstation": {
-			Class: "environmental_sensor", Room: "basement.garden", DisplayName: "Weather Station",
+		"outdoor_station": {
+			Class: "environmental_sensor", Room: "floor1.room-b", DisplayName: "Outdoor Station",
 		},
-		"firealarm_utility": {
-			Class: "fire_alarm", Room: "basement.utility", DisplayName: "Fire Alarm: Utility",
+		"alarm_a": {
+			Class: "fire_alarm", Room: "floor1.room-c", DisplayName: "Alarm A",
 			EnvironmentFields: []string{"temperature_c"},
 		},
-		"winefridge": {
-			Class: "continuous_power_device", Room: "groundfloor.kitchen", DisplayName: "Wine Fridge",
+		"plug_a": {
+			Class: "continuous_power_device", Room: "floor2.room-a", DisplayName: "Plug A",
 		},
 	}
 }
@@ -39,7 +39,7 @@ func TestSeries_GroupByRoomKeysOnRoomIDs(t *testing.T) {
 	s, q := dataSetup(t)
 	s.Config = fakeConfig{devices: roomDevices()}
 	q.QueryFunc = func(string) ([]influx.Row, error) {
-		return bucketRows(t, s, "climate_basement", "today", "1h", 20), nil
+		return bucketRows(t, s, "sensor_a", "today", "1h", 20), nil
 	}
 
 	w := doGET(t, s, "/series?window=today&interval=1h&group_by=room")
@@ -61,7 +61,7 @@ func TestSeries_GroupByRoomKeysOnRoomIDs(t *testing.T) {
 	}
 	found := false
 	for _, ser := range resp.Series {
-		if ser.Key == "basement.hallway" {
+		if ser.Key == "floor1.room-a" {
 			found = true
 		}
 	}
@@ -74,7 +74,7 @@ func TestUnknownRoomIsA400(t *testing.T) {
 	s, _ := dataSetup(t)
 	s.Config = fakeConfig{devices: roomDevices()}
 
-	w := doGET(t, s, "/series?window=today&interval=1h&rooms=basement.attic")
+	w := doGET(t, s, "/series?window=today&interval=1h&rooms=floor1.room-z")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d: %s", w.Code, w.Body.String())
 	}
@@ -88,14 +88,14 @@ func TestUnknownRoomIsA400(t *testing.T) {
 func TestLegacyLocationOnlyConfigStillGroups(t *testing.T) {
 	s, q := dataSetup(t)
 	q.QueryFunc = func(string) ([]influx.Row, error) {
-		return bucketRows(t, s, "climate_basement", "today", "1h", 20), nil
+		return bucketRows(t, s, "sensor_a", "today", "1h", 20), nil
 	}
 
 	w := doGET(t, s, "/series?window=today&interval=1h&group_by=room")
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), `"key":"basement"`) {
+	if !strings.Contains(w.Body.String(), `"key":"area-a"`) {
 		t.Errorf("a location-only namespace must still group: %s", w.Body.String())
 	}
 }
@@ -107,7 +107,7 @@ func TestEmptyRoomsParamMeansNoFilter(t *testing.T) {
 	s, q := dataSetup(t)
 	s.Config = fakeConfig{devices: roomDevices()}
 	q.QueryFunc = func(string) ([]influx.Row, error) {
-		return bucketRows(t, s, "climate_basement", "today", "1h", 20), nil
+		return bucketRows(t, s, "sensor_a", "today", "1h", 20), nil
 	}
 
 	all := doGET(t, s, "/series?window=today&interval=1h")
@@ -132,14 +132,56 @@ func TestRemovedLocationsParamIsRejectedNotIgnored(t *testing.T) {
 	s, q := dataSetup(t)
 	s.Config = fakeConfig{devices: roomDevices()}
 	q.QueryFunc = func(string) ([]influx.Row, error) {
-		return bucketRows(t, s, "climate_basement", "today", "1h", 20), nil
+		return bucketRows(t, s, "sensor_a", "today", "1h", 20), nil
 	}
 
-	w := doGET(t, s, "/series?window=today&interval=1h&locations=basement.utility")
+	w := doGET(t, s, "/series?window=today&interval=1h&locations=floor1.room-c")
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("want 400, got %d: %s", w.Code, w.Body.String())
 	}
 	if !strings.Contains(w.Body.String(), "rooms") {
 		t.Errorf("the error must name the replacement: %s", w.Body.String())
+	}
+}
+
+// The catalog passes through the floor the namespace declares for each device,
+// and reports empty when it declares none. It never reads a floor out of the room
+// id: the floorplan publishes both properties, and greenhouse is not the place
+// that decides how a room id is spelled.
+func TestDevices_FloorComesFromTheNamespace(t *testing.T) {
+	s, _ := dataSetup(t)
+	s.Config = fakeConfig{devices: map[string]config.DeviceConfig{
+		"sensor_e": {
+			Class: "environmental_sensor", Floor: "floor1", Room: "floor1.room-a",
+			DisplayName: "Sensor E",
+		},
+		"sensor_g": {
+			Class: "environmental_sensor", Floor: "floor2", Room: "floor2.room-a",
+			DisplayName: "Sensor G",
+		},
+		// Declares a room but no floor: unknown, reported as empty.
+		"sensor_f": {
+			Class: "environmental_sensor", Room: "floor2.room-b", DisplayName: "Sensor F",
+		},
+		// Declares neither.
+		"sensor_a": {
+			Class: "environmental_sensor", Location: "area-a", DisplayName: "Sensor A",
+		},
+	}}
+
+	want := map[string]string{
+		"sensor_e": "floor1",
+		"sensor_g": "floor2",
+		"sensor_f": "",
+		"sensor_a": "",
+	}
+	got := map[string]string{}
+	for _, d := range getCatalog(t, s).Devices {
+		got[d.ID] = d.Floor
+	}
+	for id, w := range want {
+		if got[id] != w {
+			t.Errorf("%s: floor = %q, want %q", id, got[id], w)
+		}
 	}
 }
