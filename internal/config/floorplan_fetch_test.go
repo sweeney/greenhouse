@@ -241,3 +241,107 @@ func TestFetcher_FloorsConcurrentReadDuringRefresh(t *testing.T) {
 	}
 	<-done
 }
+
+// publishedFloorplanDoc is the shape config.swee.net ACTUALLY publishes: a
+// single "floors" key holding an array, each record carrying its own id, and
+// extra keys (here "ceiling") greenhouse does not model.
+//
+// The map-keyed form above was assumed from how the devices namespace is shaped.
+// The floorplan namespace is not shaped that way, so greenhouse decoded nothing
+// and fail-open turned a wrong guess into blank names in prod — the fetch failed
+// with "cannot unmarshal array into Go value of type config.FloorConfig", /floors
+// degraded to UNKNOWN, and it looked exactly like a namespace that was never
+// configured.
+func publishedFloorplanDoc() map[string]any {
+	return map[string]any{
+		"floors": []any{
+			map[string]any{"id": "floor1", "name": "Lower Floor", "order": 1, "elevation": 0.0, "ceiling": 2.5},
+			map[string]any{"id": "floor2", "name": "Upper Floor", "order": 2, "elevation": 3.2, "ceiling": 2.5},
+			map[string]any{"id": "floor3", "name": "Top Floor", "ceiling": 2.5},
+		},
+	}
+}
+
+func TestFetcher_RefreshPopulatesFloorsFromPublishedShape(t *testing.T) {
+	mux := http.NewServeMux()
+	serveNamespace(mux, testNamespace, map[string]any{
+		"sensor_e": map[string]any{"class": "environmental_sensor", "floor": "floor1"},
+	})
+	serveNamespace(mux, testFloorplanNamespace, publishedFloorplanDoc())
+
+	f := floorplanFetcher(t, mux)
+	f.Refresh(context.Background())
+
+	floors := f.Floors()
+	if len(floors) != 3 {
+		t.Fatalf("got %d floors, want 3: %v", len(floors), floors)
+	}
+	if got := floors["floor1"].Name; got != "Lower Floor" {
+		t.Errorf("floor1 name = %q, want Lower Floor", got)
+	}
+	if o := floors["floor2"].Order; o == nil || *o != 2 {
+		t.Errorf("floor2 order = %v, want 2", o)
+	}
+	if e := floors["floor2"].Elevation; e == nil || *e != 3.2 {
+		t.Errorf("floor2 elevation = %v, want 3.2", e)
+	}
+	// The inline id is what devices reference and floors= matches, so it must
+	// survive into the record rather than being left empty.
+	if got := floors["floor3"].ID; got != "floor3" {
+		t.Errorf("floor3 id = %q, want floor3", got)
+	}
+	if o := floors["floor3"].Order; o != nil {
+		t.Errorf("floor3 declares no order, so it must stay UNKNOWN, got %v", *o)
+	}
+
+	// A namespace this fetch understood must report healthy, or /healthz says
+	// "ok" while the data behind it is missing.
+	if st := f.Statuses()[testFloorplanNamespace]; !st.OK {
+		t.Errorf("floorplan status not ok: %+v", st)
+	}
+}
+
+// The two shapes are told apart by JSON type, not by key name: a floor whose id
+// is literally "floors" is an OBJECT there, so the document is the map shape and
+// that floor decodes normally. Pinned because keying off the name alone would
+// silently drop it.
+func TestFetcher_FloorNamedFloorsIsNotMistakenForTheArrayShape(t *testing.T) {
+	mux := http.NewServeMux()
+	serveNamespace(mux, testNamespace, map[string]any{})
+	serveNamespace(mux, testFloorplanNamespace, map[string]any{
+		"floors": map[string]any{"name": "Oddly Named Floor", "order": 1},
+	})
+
+	f := floorplanFetcher(t, mux)
+	f.Refresh(context.Background())
+
+	got := f.Floors()
+	if len(got) != 1 || got["floors"].Name != "Oddly Named Floor" {
+		t.Fatalf("want the map shape decoded, got %v", got)
+	}
+}
+
+// In the array shape the id is inline, and a record without one cannot be
+// referenced by a device's `floor` or matched by floors=. It is skipped rather
+// than keyed on "", which would publish a floor nothing can select.
+func TestFetcher_ArrayShapeSkipsRecordsWithNoID(t *testing.T) {
+	mux := http.NewServeMux()
+	serveNamespace(mux, testNamespace, map[string]any{})
+	serveNamespace(mux, testFloorplanNamespace, map[string]any{
+		"floors": []any{
+			map[string]any{"id": "floor1", "name": "Lower Floor"},
+			map[string]any{"name": "Nameless", "order": 2},
+		},
+	})
+
+	f := floorplanFetcher(t, mux)
+	f.Refresh(context.Background())
+
+	got := f.Floors()
+	if len(got) != 1 {
+		t.Fatalf("want only the identified floor, got %v", got)
+	}
+	if _, ok := got[""]; ok {
+		t.Error(`a floor was keyed on "", which floors= can never match`)
+	}
+}
