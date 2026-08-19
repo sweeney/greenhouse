@@ -32,6 +32,16 @@ type ConfigProvider interface {
 	Devices() map[string]config.DeviceConfig
 }
 
+// FloorProvider supplies the floor records behind /floors. The Fetcher satisfies
+// it; tests inject a fake. It is OPTIONAL — Server.FloorRecords may be nil, and
+// then /floors still lists every floor that holds a climate sensor with name and
+// order reported as unknown. Floor labels are presentation detail, so a missing
+// floorplan must never stop a climate service serving climate.
+type FloorProvider interface {
+	// Floors returns the current floorplan snapshot keyed by floor id.
+	Floors() map[string]config.FloorConfig
+}
+
 // ConfigStatus surfaces the remote-config fetcher's per-namespace status for
 // /healthz. The Fetcher satisfies it; tests inject a fake. May be nil (then
 // /healthz omits remote_config).
@@ -90,6 +100,12 @@ type Server struct {
 	// (data handlers require it).
 	Config ConfigProvider
 
+	// FloorRecords supplies floor names and storey order for /floors. The real
+	// impl is the Fetcher; tests inject a fake. May be nil (and is, whenever no
+	// floorplan namespace is configured) — /floors then reports every floor's
+	// name and order as unknown rather than failing.
+	FloorRecords FloorProvider
+
 	// RemoteConfig surfaces per-namespace remote-config fetch status on
 	// /healthz. The real impl is the Fetcher (which satisfies ConfigStatus);
 	// tests may inject a fake or leave it nil (then /healthz omits the field).
@@ -108,6 +124,16 @@ func (s *Server) clock() testutil.Clock {
 		return s.Clock
 	}
 	return testutil.RealClock{}
+}
+
+// floors returns the current floor records, or nil when no floorplan provider is
+// configured. A nil map reads as empty, so /floors degrades to "every floor is
+// unknown" rather than panicking on an instance with no floorplan namespace.
+func (s *Server) floors() map[string]config.FloorConfig {
+	if s.FloorRecords == nil {
+		return nil
+	}
+	return s.FloorRecords.Floors()
 }
 
 // loc returns the configured timezone, defaulting to UTC.
@@ -147,6 +173,7 @@ func newMux(s *Server) *http.ServeMux {
 	mux.Handle("GET /devices/{id}/series", authmw(http.HandlerFunc(s.handleDeviceSeries)))
 	mux.Handle("GET /devices/{id}/latest", authmw(http.HandlerFunc(s.handleDeviceLatest)))
 	mux.Handle("GET /series", authmw(http.HandlerFunc(s.handleSeries)))
+	mux.Handle("GET /floors", authmw(http.HandlerFunc(s.handleFloors)))
 	mux.Handle("GET /fields", authmw(http.HandlerFunc(s.handleFields)))
 	return mux
 }

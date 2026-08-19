@@ -517,6 +517,88 @@ func (s *Server) handleDeviceLatest(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// floorEntry is one row in the /floors catalog: a floor id plus whatever the
+// floorplan namespace declares about it.
+type floorEntry struct {
+	// ID is the value to pass back as floors= and the value devices carry in
+	// their `floor` property.
+	ID string `json:"id"`
+	// Name is the floorplan's display label, empty when it declares none. The
+	// catalog reports it empty rather than title-casing the id and hoping.
+	Name string `json:"name"`
+	// Order is the storey position, ascending from the lowest. Null when the
+	// floorplan declares none — a pointer because 0 is a legitimate order (a
+	// basement) and so cannot double as "undeclared".
+	Order *int `json:"order"`
+	// Elevation is metres above the site datum, null when undeclared. Pointer for
+	// the same reason as Order: 0.0 is a real elevation.
+	Elevation *float64 `json:"elevation"`
+	// DeviceCount is how many climate devices declare this floor. Always at least
+	// 1, since a floor with none is not listed.
+	DeviceCount int `json:"device_count"`
+}
+
+// handleFloors serves GET /floors: the floor catalog, and the discoverable
+// vocabulary behind `floors=` — the relationship /fields has to `field=`.
+//
+// WHICH floors are listed is the contract that matters. It is exactly the floors
+// at least one CLIMATE device declares, which is exactly the set `floors=`
+// accepts. The two are derived from the same predicate deliberately: if /floors
+// advertised a floor that /series rejected with "unknown floor", a client filling
+// a picker from this endpoint would build a broken control out of correct data.
+// So a floorplan record naming a floor with no climate sensor is NOT listed — it
+// exists in the building, but not as far as the climate API is concerned — and a
+// floor devices declare but the floorplan has no record for IS listed, with its
+// name and order null.
+//
+// That second case is why name and order are nullable rather than defaulted.
+// Greenhouse passes the floorplan's answers through and reports UNKNOWN where it
+// has none; it never derives a name from the id or a position from sort order,
+// for the same reason it never derives a device's floor from its room id.
+//
+// Ordering: by declared order ascending, then by id, so floors with records come
+// back in building order and undeclared ones sort last deterministically rather
+// than wherever a map iteration left them.
+func (s *Server) handleFloors(w http.ResponseWriter, _ *http.Request) {
+	records := s.floors()
+
+	counts := map[string]int{}
+	for _, dev := range s.Config.Devices() {
+		if !dev.ReportsEnvironment() {
+			continue
+		}
+		// An undeclared floor is UNKNOWN, not a floor of its own: it is never
+		// listed and never matched by floors=. See config.DeviceConfig.Floor.
+		if dev.Floor != "" {
+			counts[dev.Floor]++
+		}
+	}
+
+	out := make([]floorEntry, 0, len(counts))
+	for id, n := range counts {
+		e := floorEntry{ID: id, DeviceCount: n}
+		if rec, ok := records[id]; ok {
+			e.Name, e.Order, e.Elevation = rec.Name, rec.Order, rec.Elevation
+		}
+		out = append(out, e)
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		switch {
+		case a.Order != nil && b.Order != nil && *a.Order != *b.Order:
+			return *a.Order < *b.Order
+		case a.Order != nil && b.Order == nil:
+			return true // a declared position sorts before an unknown one
+		case a.Order == nil && b.Order != nil:
+			return false
+		}
+		return a.ID < b.ID
+	})
+
+	writeJSON(w, http.StatusOK, map[string]any{"floors": out})
+}
+
 // handleFields serves GET /fields: the field registry (name, unit, default fn)
 // so consumers can build field pickers.
 func (s *Server) handleFields(w http.ResponseWriter, _ *http.Request) {

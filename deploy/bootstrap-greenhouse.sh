@@ -122,6 +122,11 @@ cat > /etc/$SERVICE/config.yaml <<CONFIG
 site:
   id: "$SITE_ID"
   devices_namespace: "$DEVICES_NAMESPACE"
+  # Optional: the namespace holding floor records (name, storey order) for /floors.
+  # Left empty deliberately — /floors still lists every floor that holds a climate
+  # sensor, reporting name and order as unknown, so an install is complete without
+  # it. Set it once the site publishes a floorplan namespace.
+  floorplan_namespace: ""
 
 http:
   listen: ":$PORT"

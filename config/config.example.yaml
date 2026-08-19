@@ -8,6 +8,12 @@
 #                      it once fell back to was deleted from the config service, so
 #                      an unset namespace now refuses to start rather than booting
 #                      and serving zero devices.
+#   floorplan_namespace  the config namespace holding this site's floor records
+#                      (id, name, order, elevation), published by /floors. OPTIONAL:
+#                      greenhouse charts devices, and a floor's label and storey
+#                      order are presentation detail. Unset, /floors still lists
+#                      every floor that holds a climate sensor with its name and
+#                      order reported as unknown.
 #
 # Both are given explicitly. devices_namespace is deliberately not derived from id: a
 # namespace is a document that either exists or does not, so guessing `devices_<id>`
@@ -18,6 +24,8 @@
 site:
   id: home
   devices_namespace: devices_home
+  # Optional. Omit it and /floors reports every floor's name and order as unknown.
+  floorplan_namespace: floorplan_home
 
 # Greenhouse local configuration.
 # Device inventory is fetched from the remote config service (config.swee.net, the
