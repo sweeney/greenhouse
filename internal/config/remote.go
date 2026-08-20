@@ -160,13 +160,14 @@ func (f *Fetcher) refreshFloorplan(ctx context.Context, token string) {
 	if f.FloorplanNamespace == "" {
 		return
 	}
-	var floors map[string]FloorConfig
-	if err := f.fetch(ctx, token, f.FloorplanNamespace, &floors); err != nil {
+	var doc floorplanDocument
+	if err := f.fetch(ctx, token, f.FloorplanNamespace, &doc); err != nil {
 		f.warn("remote config: floorplan namespace unavailable, keeping last-known",
 			"namespace", f.FloorplanNamespace, "error", err)
 		f.recordStatus(f.FloorplanNamespace, err)
 		return
 	}
+	floors := map[string]FloorConfig(doc)
 	if floors == nil {
 		floors = map[string]FloorConfig{}
 	}
