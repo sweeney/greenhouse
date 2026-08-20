@@ -297,6 +297,18 @@ floor that holds a climate sensor — with `name` and `order` reported as unknow
 fetch failure is fail-open and never touches the devices snapshot. A missing floorplan can
 degrade the labels; it can never stop a climate service serving climate.
 
+The floorplan document is an **array**, unlike the devices namespace's map keyed by id:
+
+```json
+{ "floors": [ { "id": "floor1", "name": "Lower Floor", "order": 1, "elevation": 0.0 } ] }
+```
+
+Greenhouse also accepts the devices-style `{"<id>": {…}}` form, because the namespace
+belongs to another service and greenhouse cannot deploy in lockstep with it. Unmodelled
+keys are ignored. Assuming it matched the devices shape is what silently broke `/floors`
+in prod (#28) — the decode failed, fail-open kept an empty snapshot, and the response was
+byte-identical to a namespace nobody had configured.
+
 `/healthz`'s `site` block reports it alongside `devices_namespace` (omitted when unset),
 so an operator seeing blank floor names can tell "no floorplan namespace configured" from
 "configured, first fetch hasn't landed" — a distinction `remote_config` only makes after a

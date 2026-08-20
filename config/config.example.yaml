@@ -8,8 +8,13 @@
 #                      it once fell back to was deleted from the config service, so
 #                      an unset namespace now refuses to start rather than booting
 #                      and serving zero devices.
-#   floorplan_namespace  the config namespace holding this site's floor records
-#                      (id, name, order, elevation), published by /floors. OPTIONAL:
+#   floorplan_namespace  the config namespace holding this site's floor records,
+#                      published by /floors. The document is an ARRAY, unlike the
+#                      devices namespace's map keyed by id:
+#                        {"floors": [{"id": "floor1", "name": "Lower Floor",
+#                                     "order": 1, "elevation": 0.0}, ...]}
+#                      (the devices-style {"<id>": {...}} form is also accepted).
+#                      OPTIONAL:
 #                      greenhouse charts devices, and a floor's label and storey
 #                      order are presentation detail. Unset, /floors still lists
 #                      every floor that holds a climate sensor with its name and
