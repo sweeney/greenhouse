@@ -100,7 +100,7 @@ func main() {
 		Clock:              testutil.RealClock{},
 		Loc:                location,
 		Config:             fetcher,
-		FloorRecords:       fetcher,
+		Floorplan:          fetcher,
 		RemoteConfig:       fetcher,
 		IdentityURL:        cfg.Identity.BaseURL,
 		PublicURL:          cfg.HTTP.PublicURL,

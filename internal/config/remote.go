@@ -68,6 +68,7 @@ type Fetcher struct {
 	mu       sync.RWMutex
 	devices  map[string]DeviceConfig
 	floors   map[string]FloorConfig
+	rooms    map[string]RoomConfig
 	statuses map[string]NamespaceStatus
 }
 
@@ -101,6 +102,24 @@ func (f *Fetcher) Floors() map[string]FloorConfig {
 	defer f.mu.RUnlock()
 	out := make(map[string]FloorConfig, len(f.floors))
 	for k, v := range f.floors {
+		out[k] = v
+	}
+	return out
+}
+
+// Rooms returns a copy of the current room-record snapshot keyed by floorplan
+// room id. Safe for concurrent use. Implements httpapi.FloorplanProvider.
+//
+// An empty map means no floorplan namespace is configured, none has been fetched
+// yet, or the document is the legacy floors-only map shape. All three are
+// UNKNOWN rather than "there are no rooms": callers enrich what they have and
+// report the rest empty, never inferring that a room does not exist because its
+// record is missing.
+func (f *Fetcher) Rooms() map[string]RoomConfig {
+	f.mu.RLock()
+	defer f.mu.RUnlock()
+	out := make(map[string]RoomConfig, len(f.rooms))
+	for k, v := range f.rooms {
 		out[k] = v
 	}
 	return out
@@ -149,7 +168,8 @@ func (f *Fetcher) Refresh(ctx context.Context) {
 	f.refreshFloorplan(ctx, token)
 }
 
-// refreshFloorplan fetches the optional floorplan namespace.
+// refreshFloorplan fetches the optional floorplan namespace, which carries both
+// the building's floors and its rooms.
 //
 // Fail-open like refreshDevices, and additionally OPTIONAL: an unset namespace
 // is silent and records no status, because there is nothing configured to be
@@ -167,13 +187,19 @@ func (f *Fetcher) refreshFloorplan(ctx context.Context, token string) {
 		f.recordStatus(f.FloorplanNamespace, err)
 		return
 	}
-	floors := map[string]FloorConfig(doc)
+	floors, rooms := doc.Floors, doc.Rooms
 	if floors == nil {
 		floors = map[string]FloorConfig{}
 	}
+	if rooms == nil {
+		rooms = map[string]RoomConfig{}
+	}
 	normaliseFloors(floors)
+	normaliseRooms(rooms)
+	// Swapped together: they come from one document, so a reader must never see
+	// this fetch's rooms beside the previous fetch's floors.
 	f.mu.Lock()
-	f.floors = floors
+	f.floors, f.rooms = floors, rooms
 	f.mu.Unlock()
 	f.recordStatus(f.FloorplanNamespace, nil)
 }

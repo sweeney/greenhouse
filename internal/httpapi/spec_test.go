@@ -35,6 +35,7 @@ var registeredPaths = []string{
 	"/devices/{id}/latest",
 	"/series",
 	"/floors",
+	"/rooms",
 	"/fields",
 }
 
