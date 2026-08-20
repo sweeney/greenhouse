@@ -73,7 +73,9 @@ shapes, the Influx Querier + fake, the Server/auth/CORS/spec skeleton, the confi
   pointers.
 - **The floorplan namespace is an ARRAY, not a keyed map** — unlike the devices
   namespace, and this is the one fact about it that is easy to get wrong. It publishes
-  `{"floors": [{"id": …, "name": …, "order": …}, …]}`, each record carrying its own id.
+  `{"floors": [{"id": …, "name": …, "order": …}, …], "rooms": [{"id": …, "name": …,
+  "floor": …, "category": …, "area": …}, …]}` — BOTH collections, each record carrying its
+  own id.
   `config.floorplanDocument` also accepts the devices-style `{"<id>": {…}}` because the
   namespace belongs to another service greenhouse cannot deploy in lockstep with, and it
   discriminates on JSON *type* rather than key name (a `floors` key holding an OBJECT is a
@@ -81,6 +83,20 @@ shapes, the Influx Querier + fake, the Server/auth/CORS/spec skeleton, the confi
   `/floors` in prod (#28): the decode failed, fail-open kept an empty snapshot, and the
   response was byte-identical to an unconfigured namespace. Never re-derive the shape from
   the devices namespace — that guess is what this documents against.
+- **`/rooms` mirrors `/floors`, and `category` is relayed RAW.** The listing is the
+  rooms at least one climate device sits in — the set `rooms=` accepts — so a picker
+  built from it can never 400, exactly as for `/floors`. Never reduce `category`
+  (`kitchen`/`circulation`/`plant`/…) to a computed flag like `is_living_space`: whether a
+  plant room "counts" is per-client POLICY, not a fact about the room, and a boolean bakes
+  one caller's answer in while two others work around it (#30). Room `name`s are NOT
+  unique — two rooms on different floors may share one — so `id` is the key and an
+  unambiguous label is composed by joining `/rooms` to `/floors`.
+- **A grouped series is labelled by NAME, keyed by ID.** `group_by=room`/`floor` take
+  `Series.Label` from the floorplan's name and fall back to the id when it declares none.
+  Never derive a label from an id — splitting on the dot and title-casing is exactly the
+  client-side guesswork `/rooms` exists to remove, and moving it into greenhouse would not
+  make it less of a guess. `Key` stays the id on both axes so identity matching is stable
+  whether or not a name happens to be published.
 - **`site.floorplan_namespace` is OPTIONAL** (unlike `devices_namespace`, which is required
   with no default). Greenhouse charts devices; floor labels are presentation detail. Unset
   is silent — no request, no `/healthz` status — and a configured-but-failing floorplan is

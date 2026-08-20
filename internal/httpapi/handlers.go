@@ -528,7 +528,8 @@ func (s *Server) handleDeviceSeries(w http.ResponseWriter, r *http.Request) {
 
 // buildSeries runs climate.BuildSeries.
 func (s *Server) buildSeries(r *http.Request, win climate.Window, iv climate.Interval, field, fn, groupBy, groupFn string, devices map[string]config.DeviceConfig) (climate.SeriesResponse, error) {
-	return climate.BuildSeries(r.Context(), s.Influx, s.Bucket, win, iv, field, fn, groupBy, groupFn, devices, s.loc())
+	return climate.BuildSeries(r.Context(), s.Influx, s.Bucket, win, iv, field, fn, groupBy, groupFn,
+		devices, s.groupLabels(groupBy), s.loc())
 }
 
 // writeSeriesShaped writes a series response in the requested shape: the columnar
@@ -674,6 +675,116 @@ func (s *Server) handleFloors(w http.ResponseWriter, _ *http.Request) {
 	})
 
 	writeJSON(w, http.StatusOK, map[string]any{"floors": out})
+}
+
+// roomEntry is one row in the /rooms catalog: a room id plus whatever the
+// floorplan namespace declares about it.
+type roomEntry struct {
+	// ID is the value to pass back as rooms= and the value devices carry in
+	// their `room` property. It is the key: NAMES ARE NOT UNIQUE, since two
+	// rooms on different floors may share one.
+	ID string `json:"id"`
+	// Name is the floorplan's display label, empty when it declares none. The
+	// catalog reports it empty rather than deriving one from the id.
+	Name string `json:"name"`
+	// Floor is the floor id the floorplan puts this room on, empty when it
+	// declares none. Passed through from the room record — never read out of the
+	// id's "<floor>.<slug>" shape, and never inferred from the floors this
+	// room's devices declare.
+	Floor string `json:"floor"`
+	// Category is the room's purpose as the floorplan classifies it, e.g.
+	// "kitchen", "circulation", "plant". Relayed RAW rather than reduced to a
+	// flag: whether a plant room "counts" is a per-client policy question.
+	Category string `json:"category"`
+	// Area is the floor area in square metres, null when undeclared. A pointer
+	// because absence differs from zero.
+	Area *float64 `json:"area"`
+	// DeviceCount is how many climate devices sit in this room. Always at least
+	// 1, since a room with none is not listed.
+	DeviceCount int `json:"device_count"`
+}
+
+// handleRooms serves GET /rooms: the room catalog, and the discoverable
+// vocabulary behind `rooms=` — the room-shaped sibling of /floors.
+//
+// WHICH rooms are listed follows /floors exactly, and for the same reason: the
+// rooms at least one CLIMATE device sits in, which is exactly the set `rooms=`
+// accepts. A picker filled from this endpoint therefore cannot produce a 400. A
+// floorplan record for a room with no climate sensor is NOT listed — it exists
+// in the building, but not as far as the climate API is concerned — and a room
+// devices declare that the floorplan has no record for IS listed, with its name,
+// floor and category empty and area null.
+//
+// Every floorplan field is passed through UNCHANGED, including `category`. It is
+// deliberately not reduced to a computed flag (is_living_space, charts_by_default
+// or similar): whether a plant room "counts" is a per-client policy question, not
+// a fact about the room. A floor-mean view excludes it, a "where is the heat
+// going?" view wants it, and an equipment view wants only it — a boolean would
+// bake the first caller's answer into the API and leave the other two working
+// around it.
+//
+// Ordering: by floor as the floorplan orders it (declared storey order, then
+// floor id), then by room id — so a client renders the list building-order
+// top to bottom without re-sorting, and rooms whose floor is unknown sort last
+// together rather than being scattered.
+func (s *Server) handleRooms(w http.ResponseWriter, _ *http.Request) {
+	records := s.rooms()
+
+	counts := map[string]int{}
+	for _, dev := range s.Config.Devices() {
+		if !dev.ReportsEnvironment() {
+			continue
+		}
+		// Place() is the same room the catalog, rooms= and group_by=room use, so
+		// this listing cannot disagree with any of them. An empty place is
+		// UNKNOWN — the device is charted by group_by=device and belongs to no
+		// room here.
+		if p := dev.Place(); p != "" {
+			counts[p]++
+		}
+	}
+
+	floors := s.floors()
+	out := make([]roomEntry, 0, len(counts))
+	for id, n := range counts {
+		e := roomEntry{ID: id, DeviceCount: n}
+		if rec, ok := records[id]; ok {
+			e.Name, e.Floor, e.Category, e.Area = rec.Name, rec.Floor, rec.Category, rec.Area
+		}
+		out = append(out, e)
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.Floor != b.Floor {
+			return floorPrecedes(floors, a.Floor, b.Floor)
+		}
+		return a.ID < b.ID
+	})
+
+	writeJSON(w, http.StatusOK, map[string]any{"rooms": out})
+}
+
+// floorPrecedes reports whether floor a sorts before floor b, by the same rule
+// /floors uses: declared storey order ascending, undeclared last, ties broken by
+// id. Shared so the two catalogs cannot order the same floors differently.
+//
+// A room whose floor is UNKNOWN ("") sorts after every known floor rather than
+// first, so unplaced rooms gather at the end instead of leading the list.
+func floorPrecedes(floors map[string]config.FloorConfig, a, b string) bool {
+	if a == "" || b == "" {
+		return a != "" // a known floor precedes an unknown one
+	}
+	ao, bo := floors[a].Order, floors[b].Order
+	switch {
+	case ao != nil && bo != nil && *ao != *bo:
+		return *ao < *bo
+	case ao != nil && bo == nil:
+		return true
+	case ao == nil && bo != nil:
+		return false
+	}
+	return a < b
 }
 
 // handleFields serves GET /fields: the field registry (name, unit, default fn)

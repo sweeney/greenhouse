@@ -249,6 +249,47 @@ paths:
         "401":
           $ref: "#/components/responses/Unauthorized"
 
+  /rooms:
+    get:
+      summary: Room catalog
+      description: >
+        The rooms that hold at least one climate sensor, each with the name,
+        floor, category and area the floorplan namespace declares. This is the
+        discoverable vocabulary behind the `rooms=` filter — the room-shaped
+        sibling of /floors.
+
+        WHICH rooms appear follows /floors exactly: the set `rooms=` accepts, so
+        a picker built from this endpoint can never produce a 400. A room no
+        climate device sits in is not listed; a room devices declare that the
+        floorplan has no record for IS listed, with `name`, `floor` and
+        `category` empty and `area` null.
+
+        `category` is the room's purpose as the floorplan classifies it (e.g.
+        "kitchen", "circulation", "plant"), relayed RAW and deliberately NOT
+        reduced to a computed flag such as is_living_space. Whether a plant room
+        "counts" is a per-client policy question, not a fact about the room: a
+        floor-mean view excludes it, a "where is the heat going?" view wants it,
+        and an equipment view wants only it. The floorplan owns the taxonomy,
+        greenhouse relays it, clients interpret it.
+
+        Note `name` is NOT unique — two rooms on different floors may share one.
+        `id` is the key; a client wanting an unambiguous label composes the
+        floor's name (from /floors) with the room's.
+
+        Ordered by floor as /floors orders it (declared storey order, then floor
+        id), then by room id. Rooms whose floor is unknown sort last together.
+      operationId: getRooms
+      tags: [data]
+      responses:
+        "200":
+          description: Room catalog
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RoomsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+
   /fields:
     get:
       summary: Field registry
@@ -564,6 +605,13 @@ components:
             Series identity: a device id, room id or floor id, per group_by.
         label:
           type: string
+          description: >
+            Human-readable series label. For group_by=device it is the device's
+            display_name. For group_by=room or group_by=floor it is the
+            floorplan's name for that room or floor, falling back to the id when
+            the floorplan declares none or no floorplan namespace is configured.
+            `key` is always the id — only `label` varies — so a caller matching on
+            identity is unaffected by whether a name happens to be published.
         room:
           type: string
           description: >
@@ -667,6 +715,13 @@ components:
             Series identity: a device id, room id or floor id, per group_by.
         label:
           type: string
+          description: >
+            Human-readable series label. For group_by=device it is the device's
+            display_name. For group_by=room or group_by=floor it is the
+            floorplan's name for that room or floor, falling back to the id when
+            the floorplan declares none or no floorplan namespace is configured.
+            `key` is always the id — only `label` varies — so a caller matching on
+            identity is unaffected by whether a name happens to be published.
         room:
           type: string
           description: >
@@ -842,6 +897,56 @@ components:
             How many climate devices declare this floor. Always at least 1, since
             a floor with none is not listed.
       required: [id, name, order, elevation, device_count]
+
+    RoomCatalogEntry:
+      type: object
+      properties:
+        id:
+          type: string
+          description: >
+            The floorplan room id. Pass it back as `rooms=`; it is the value
+            devices carry in their `room` property, and the `key` of a
+            group_by=room series. This is the identifier — `name` is not unique.
+        name:
+          type: string
+          description: >
+            Display label from the floorplan namespace, e.g. "Room A". Empty when
+            the namespace declares none — unknown, not derived from the id. Two
+            rooms on different floors may share a name.
+        floor:
+          type: string
+          description: >
+            The floor id this room sits on, as the floorplan declares it. Empty
+            when it declares none. Never read out of the room id's
+            "<floor>.<slug>" shape, and never inferred from the floors this
+            room's devices declare.
+        category:
+          type: string
+          description: >
+            The room's purpose as the floorplan classifies it, e.g. "kitchen",
+            "circulation", "plant". Relayed raw; empty when undeclared. Clients
+            decide what each category means for them.
+        area:
+          type: number
+          nullable: true
+          description: >
+            Floor area in square metres, null when undeclared. Nullable rather
+            than defaulted because absence differs from zero.
+        device_count:
+          type: integer
+          description: >
+            How many climate devices sit in this room. Always at least 1, since a
+            room with none is not listed.
+      required: [id, name, floor, category, area, device_count]
+
+    RoomsResponse:
+      type: object
+      properties:
+        rooms:
+          type: array
+          items:
+            $ref: "#/components/schemas/RoomCatalogEntry"
+      required: [rooms]
 
     FloorsResponse:
       type: object

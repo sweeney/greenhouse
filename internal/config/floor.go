@@ -54,12 +54,15 @@ func normaliseFloors(floors map[string]FloorConfig) {
 	}
 }
 
-// floorplanDocument is the floorplan namespace document, decoded into records
-// keyed by floor id whichever of two shapes the namespace publishes.
+// floorplanDocument is the decoded floorplan namespace document: the building's
+// floors AND its rooms, each keyed by id, whichever of two shapes the namespace
+// publishes.
 //
-// The published shape wraps an ARRAY, each record carrying its own id:
+// The published shape wraps ARRAYS, each record carrying its own id:
 //
-//	{"floors": [{"id": "floor1", "name": "Lower Floor", "order": 1}, ...]}
+//	{"floors": [{"id": "floor1", "name": "Lower Floor", "order": 1}, ...],
+//	 "rooms":  [{"id": "floor1.room-a", "name": "Room A", "floor": "floor1",
+//	             "category": "utility", "area": 12.4}, ...]}
 //
 // The devices namespace, by contrast, is a MAP keyed by id, and greenhouse
 // originally assumed the floorplan matched it:
@@ -73,10 +76,16 @@ func normaliseFloors(floors map[string]FloorConfig) {
 // order — indistinguishable from a floorplan namespace nobody configured, which
 // is exactly how this went unnoticed in prod until /healthz was read.
 //
-// The two are told apart by JSON type, not by key name: a "floors" key holding
-// an object is a floor whose id happens to be "floors", and decodes as the map
-// shape. Unmodelled keys (e.g. "ceiling") are ignored in both.
-type floorplanDocument map[string]FloorConfig
+// The shapes are told apart by JSON type, not by key name: a "floors" key
+// holding an object is a floor whose id happens to be "floors", and decodes as
+// the map shape. The map shape carries FLOORS ONLY — it predates rooms being
+// published and there is no room-shaped reading of it, so Rooms is empty there
+// and every room's name and category are honestly UNKNOWN rather than guessed.
+// Unmodelled keys (e.g. "ceiling") are ignored throughout.
+type floorplanDocument struct {
+	Floors map[string]FloorConfig
+	Rooms  map[string]RoomConfig
+}
 
 func (d *floorplanDocument) UnmarshalJSON(b []byte) error {
 	var probe map[string]json.RawMessage
@@ -84,22 +93,48 @@ func (d *floorplanDocument) UnmarshalJSON(b []byte) error {
 		return err
 	}
 
-	if raw, ok := probe["floors"]; ok && isJSONArray(raw) {
-		var list []FloorConfig
-		if err := json.Unmarshal(raw, &list); err != nil {
-			return err
+	floorsRaw, hasFloors := probe["floors"]
+	roomsRaw, hasRooms := probe["rooms"]
+
+	// The wrapper shape is identified by either collection arriving as an ARRAY.
+	// Checking both means a document that publishes rooms but no floors (or vice
+	// versa) is still read as the wrapper it is, rather than falling through to
+	// the map branch and failing to unmarshal an array into a FloorConfig.
+	if (hasFloors && isJSONArray(floorsRaw)) || (hasRooms && isJSONArray(roomsRaw)) {
+		out := floorplanDocument{
+			Floors: map[string]FloorConfig{},
+			Rooms:  map[string]RoomConfig{},
 		}
-		out := make(floorplanDocument, len(list))
-		for _, f := range list {
-			// A record with no id cannot be referenced by a device's `floor`
-			// property or matched by floors=, so it is unusable rather than
-			// merely unlabelled. Skipped instead of keyed on "", which would
-			// invent a floor nothing can select. A later duplicate wins, as it
-			// would in a JSON object.
-			if f.ID == "" {
-				continue
+		if hasFloors && isJSONArray(floorsRaw) {
+			var list []FloorConfig
+			if err := json.Unmarshal(floorsRaw, &list); err != nil {
+				return err
 			}
-			out[f.ID] = f
+			for _, f := range list {
+				// A record with no id cannot be referenced by a device's `floor`
+				// property or matched by floors=, so it is unusable rather than
+				// merely unlabelled. Skipped instead of keyed on "", which would
+				// invent a floor nothing can select. A later duplicate wins, as it
+				// would in a JSON object.
+				if f.ID == "" {
+					continue
+				}
+				out.Floors[f.ID] = f
+			}
+		}
+		if hasRooms && isJSONArray(roomsRaw) {
+			var list []RoomConfig
+			if err := json.Unmarshal(roomsRaw, &list); err != nil {
+				return err
+			}
+			for _, r := range list {
+				// Same rule, same reason: an id-less room is unreferenceable by a
+				// device's `room` property and unmatchable by rooms=.
+				if r.ID == "" {
+					continue
+				}
+				out.Rooms[r.ID] = r
+			}
 		}
 		*d = out
 		return nil
@@ -109,7 +144,7 @@ func (d *floorplanDocument) UnmarshalJSON(b []byte) error {
 	if err := json.Unmarshal(b, &keyed); err != nil {
 		return err
 	}
-	*d = keyed
+	*d = floorplanDocument{Floors: keyed}
 	return nil
 }
 

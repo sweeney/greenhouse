@@ -41,7 +41,7 @@ func TestAssembleSeries_ByDevice(t *testing.T) {
 		"sensor_d": {30, 31, 32},
 	})
 
-	got := AssembleSeries(buckets, devices, v, GroupByDevice, DefaultField, DefaultGroupFn)
+	got := AssembleSeries(buckets, devices, v, GroupByDevice, DefaultField, DefaultGroupFn, nil)
 	// 4 environmental devices, plug_a excluded; sorted by id.
 	if len(got) != 4 {
 		t.Fatalf("want 4 device series, got %d", len(got))
@@ -86,7 +86,7 @@ func TestAssembleSeries_ByRoomMeansNotSums(t *testing.T) {
 		"sensor_d": {30, 10}, // room member B
 	})
 
-	got := AssembleSeries(buckets, devices, v, GroupByRoom, DefaultField, DefaultGroupFn)
+	got := AssembleSeries(buckets, devices, v, GroupByRoom, DefaultField, DefaultGroupFn, nil)
 	// Locations: area-a, area-b, area-d (sorted).
 	byKey := map[string]Series{}
 	for _, s := range got {
@@ -121,7 +121,7 @@ func TestAssembleSeries_GapsArePreserved(t *testing.T) {
 	v := vals(map[string][]float64{
 		"sensor_a": {18, math.NaN(), 20},
 	})
-	got := AssembleSeries(buckets, devices, v, GroupByDevice, DefaultField, DefaultGroupFn)
+	got := AssembleSeries(buckets, devices, v, GroupByDevice, DefaultField, DefaultGroupFn, nil)
 	if len(got) != 1 {
 		t.Fatalf("want 1 series, got %d", len(got))
 	}
@@ -197,7 +197,7 @@ func TestBuildSeries_SingleDeviceMeanField(t *testing.T) {
 		},
 	}
 
-	resp, err := BuildSeries(context.Background(), q, "statehouse", win, iv, "temperature_c", "mean", GroupByDevice, DefaultGroupFn, devices, loc)
+	resp, err := BuildSeries(context.Background(), q, "statehouse", win, iv, "temperature_c", "mean", GroupByDevice, DefaultGroupFn, devices, nil, loc)
 	if err != nil {
 		t.Fatalf("BuildSeries: %v", err)
 	}
@@ -236,7 +236,7 @@ func TestBuildSeries_FnPassThrough(t *testing.T) {
 	}
 	for _, fn := range []string{"min", "max", "last"} {
 		q := &influx.FakeQuerier{PingOK: true}
-		_, err := BuildSeries(context.Background(), q, "statehouse", win, iv, "humidity_pct", fn, GroupByDevice, DefaultGroupFn, devices, loc)
+		_, err := BuildSeries(context.Background(), q, "statehouse", win, iv, "humidity_pct", fn, GroupByDevice, DefaultGroupFn, devices, nil, loc)
 		if err != nil {
 			t.Fatalf("BuildSeries fn=%s: %v", fn, err)
 		}
@@ -293,7 +293,7 @@ func TestBuildSeries_QueryError(t *testing.T) {
 	iv, _ := ResolveInterval(win, "1h", loc)
 	devices := map[string]config.DeviceConfig{"sensor_a": {Class: "environmental_sensor"}}
 	q := &influx.FakeQuerier{Err: context.DeadlineExceeded}
-	if _, err := BuildSeries(context.Background(), q, "statehouse", win, iv, "temperature_c", "mean", GroupByDevice, DefaultGroupFn, devices, loc); err == nil {
+	if _, err := BuildSeries(context.Background(), q, "statehouse", win, iv, "temperature_c", "mean", GroupByDevice, DefaultGroupFn, devices, nil, loc); err == nil {
 		t.Fatal("expected error from query failure")
 	}
 }
@@ -305,7 +305,7 @@ func TestBuildSeries_NoEnvironmentalDevicesNoQuery(t *testing.T) {
 	iv, _ := ResolveInterval(win, "1h", loc)
 	devices := map[string]config.DeviceConfig{"plug_a": {Class: "continuous_power_device"}}
 	q := &influx.FakeQuerier{PingOK: true}
-	resp, err := BuildSeries(context.Background(), q, "statehouse", win, iv, "temperature_c", "mean", GroupByDevice, DefaultGroupFn, devices, loc)
+	resp, err := BuildSeries(context.Background(), q, "statehouse", win, iv, "temperature_c", "mean", GroupByDevice, DefaultGroupFn, devices, nil, loc)
 	if err != nil {
 		t.Fatalf("BuildSeries: %v", err)
 	}
@@ -340,7 +340,7 @@ func TestAssembleSeries_ByDevice_IncludesFireAlarms(t *testing.T) {
 		"alarm_b": {23.6, 23.5},
 		"alarm_a": {20.2, 20.3},
 		"plug_a":  {99, 99},
-	}), GroupByDevice, DefaultField, DefaultGroupFn)
+	}), GroupByDevice, DefaultField, DefaultGroupFn, nil)
 
 	var keys []string
 	for _, s := range got {
@@ -366,7 +366,7 @@ func TestAssembleSeries_ByLocation_MeansAcrossMixedClasses(t *testing.T) {
 		"probe_a": {22.0},
 		"alarm_b": {24.0},
 		"alarm_a": {20.0},
-	}), GroupByRoom, DefaultField, DefaultGroupFn)
+	}), GroupByRoom, DefaultField, DefaultGroupFn, nil)
 
 	byKey := map[string]Series{}
 	for _, s := range got {

@@ -42,7 +42,7 @@ func floorValues() map[string][]float64 {
 func assembleFloor(t *testing.T, groupFn string) map[string]Series {
 	t.Helper()
 	return seriesByKey(AssembleSeries(
-		twoBucketAxis(), floorFixture(), floorValues(), GroupByFloor, DefaultField, groupFn))
+		twoBucketAxis(), floorFixture(), floorValues(), GroupByFloor, DefaultField, groupFn, nil))
 }
 
 // --- group_by=floor ---
@@ -72,7 +72,7 @@ func TestAssembleSeries_ByFloor_TrustsTheDeclaredFloor(t *testing.T) {
 		"sensor_e": {Class: "environmental_sensor", Floor: "floor3", Room: "floor1.room-a"},
 	}
 	got := seriesByKey(AssembleSeries(twoBucketAxis(), devices,
-		map[string][]float64{"sensor_e": {10, 10}}, GroupByFloor, DefaultField, GroupFnMean))
+		map[string][]float64{"sensor_e": {10, 10}}, GroupByFloor, DefaultField, GroupFnMean, nil))
 
 	if _, ok := got["floor3"]; !ok {
 		t.Errorf("want a series keyed on the declared floor3, got %v", got)
@@ -93,7 +93,7 @@ func TestAssembleSeries_ByFloor_LeavesRoomEmpty(t *testing.T) {
 // Room grouping still carries its room, unchanged.
 func TestAssembleSeries_ByRoom_StillCarriesRoom(t *testing.T) {
 	got := seriesByKey(AssembleSeries(twoBucketAxis(), floorFixture(), floorValues(),
-		GroupByRoom, DefaultField, GroupFnMean))
+		GroupByRoom, DefaultField, GroupFnMean, nil))
 
 	if room := got["floor1.room-a"].Room; room != "floor1.room-a" {
 		t.Errorf("room = %q, want the room id", room)
@@ -114,7 +114,7 @@ func TestAssembleSeries_UnknownGroupKeyIsOmittedOnBothAxes(t *testing.T) {
 
 	for _, groupBy := range []string{GroupByFloor, GroupByRoom} {
 		t.Run(groupBy, func(t *testing.T) {
-			got := seriesByKey(AssembleSeries(twoBucketAxis(), devices, vals, groupBy, DefaultField, GroupFnMean))
+			got := seriesByKey(AssembleSeries(twoBucketAxis(), devices, vals, groupBy, DefaultField, GroupFnMean, nil))
 			if len(got) != 1 {
 				t.Fatalf("want exactly the one known group, got %v", got)
 			}
@@ -171,7 +171,7 @@ func TestAssembleSeries_GroupFn_MinMeanMaxFormABand(t *testing.T) {
 // zero-valued combine.
 func TestAssembleSeries_GroupFn_EmptyDefaultsToMean(t *testing.T) {
 	got := seriesByKey(AssembleSeries(twoBucketAxis(), floorFixture(), floorValues(),
-		GroupByFloor, DefaultField, ""))
+		GroupByFloor, DefaultField, "", nil))
 
 	if v := got["floor1"].Values[0]; v != 20 {
 		t.Errorf("empty group_fn = %v, want the mean 20", v)
@@ -187,8 +187,8 @@ func TestAssembleSeries_GroupFn_HandlesNegatives(t *testing.T) {
 	}
 	vals := map[string][]float64{"sensor_e": {-5, -5}, "sensor_f": {3, 3}}
 
-	min := seriesByKey(AssembleSeries(twoBucketAxis(), devices, vals, GroupByFloor, DefaultField, GroupFnMin))
-	max := seriesByKey(AssembleSeries(twoBucketAxis(), devices, vals, GroupByFloor, DefaultField, GroupFnMax))
+	min := seriesByKey(AssembleSeries(twoBucketAxis(), devices, vals, GroupByFloor, DefaultField, GroupFnMin, nil))
+	max := seriesByKey(AssembleSeries(twoBucketAxis(), devices, vals, GroupByFloor, DefaultField, GroupFnMax, nil))
 
 	if v := min["floor1"].Values[0]; v != -5 {
 		t.Errorf("min = %v, want -5", v)
@@ -214,7 +214,7 @@ func TestAssembleSeries_GroupFn_SkipsNonReportingMembers(t *testing.T) {
 
 	for _, fn := range []string{GroupFnMean, GroupFnMin, GroupFnMax} {
 		t.Run(fn, func(t *testing.T) {
-			got := seriesByKey(AssembleSeries(twoBucketAxis(), devices, vals, GroupByFloor, DefaultField, fn))
+			got := seriesByKey(AssembleSeries(twoBucketAxis(), devices, vals, GroupByFloor, DefaultField, fn, nil))
 			v := got["floor1"].Values[0]
 			if v == 0 {
 				t.Fatalf("%s treated an absent member as 0 — a gap is not a reading", fn)
@@ -235,7 +235,7 @@ func TestAssembleSeries_GroupFn_EmptyBucketStaysAGap(t *testing.T) {
 
 	for _, fn := range []string{GroupFnMean, GroupFnMin, GroupFnMax} {
 		t.Run(fn, func(t *testing.T) {
-			got := seriesByKey(AssembleSeries(twoBucketAxis(), devices, vals, GroupByFloor, DefaultField, fn))
+			got := seriesByKey(AssembleSeries(twoBucketAxis(), devices, vals, GroupByFloor, DefaultField, fn, nil))
 			if v := got["floor1"].Values[0]; !math.IsNaN(v) {
 				t.Errorf("%s: empty bucket = %v, want NaN", fn, v)
 			}
@@ -257,7 +257,7 @@ func TestAssembleSeries_GroupFn_MembershipIsPerBucket(t *testing.T) {
 		"sensor_e": {10, 10},
 		"sensor_f": {30, math.NaN()}, // present for bucket 0, gone for bucket 1
 	}
-	got := seriesByKey(AssembleSeries(twoBucketAxis(), devices, vals, GroupByFloor, DefaultField, GroupFnMax))
+	got := seriesByKey(AssembleSeries(twoBucketAxis(), devices, vals, GroupByFloor, DefaultField, GroupFnMax, nil))
 
 	if v := got["floor1"].Values[0]; v != 30 {
 		t.Errorf("bucket 0 max = %v, want 30 while both reported", v)
@@ -275,7 +275,7 @@ func TestAssembleSeries_GroupFn_IrrelevantToGroupByDevice(t *testing.T) {
 	var first []Series
 	for _, fn := range []string{GroupFnMean, GroupFnMin, GroupFnMax} {
 		got := AssembleSeries(twoBucketAxis(), floorFixture(), floorValues(),
-			GroupByDevice, DefaultField, fn)
+			GroupByDevice, DefaultField, fn, nil)
 		if first == nil {
 			first = got
 			continue
@@ -299,7 +299,7 @@ func TestAssembleSeries_GroupFn_CircularStillRefusedForEveryCombine(t *testing.T
 		t.Run(fn, func(t *testing.T) {
 			got := seriesByKey(AssembleSeries(twoBucketAxis(), oneRoomTwoSensors(),
 				map[string][]float64{"probe_a": {350, 350}, "probe_b": {10, 10}},
-				GroupByRoom, circularField, fn))
+				GroupByRoom, circularField, fn, nil))
 
 			if v := got["floor1.room-a"].Values[0]; !math.IsNaN(v) {
 				t.Errorf("group_fn=%s produced %v for a two-member bearing; no combine "+
@@ -318,8 +318,8 @@ func TestAssembleSeries_GroupFn_SummaryStatsFollowTheCombine(t *testing.T) {
 	}
 	vals := map[string][]float64{"sensor_e": {10, 10}, "sensor_f": {30, 30}}
 
-	min := seriesByKey(AssembleSeries(twoBucketAxis(), devices, vals, GroupByFloor, DefaultField, GroupFnMin))
-	max := seriesByKey(AssembleSeries(twoBucketAxis(), devices, vals, GroupByFloor, DefaultField, GroupFnMax))
+	min := seriesByKey(AssembleSeries(twoBucketAxis(), devices, vals, GroupByFloor, DefaultField, GroupFnMin, nil))
+	max := seriesByKey(AssembleSeries(twoBucketAxis(), devices, vals, GroupByFloor, DefaultField, GroupFnMax, nil))
 
 	if m := min["floor1"].Mean; m != 10 {
 		t.Errorf("group_fn=min series mean = %v, want 10: the summary describes the "+

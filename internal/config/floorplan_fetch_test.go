@@ -345,3 +345,249 @@ func TestFetcher_ArrayShapeSkipsRecordsWithNoID(t *testing.T) {
 		t.Error(`a floor was keyed on "", which floors= can never match`)
 	}
 }
+
+// The floorplan document carries the building's ROOMS as well as its floors, in
+// the same wrapper-of-arrays shape (#28). Rooms are what /rooms publishes and
+// what labels a group_by=room series.
+
+// publishedFloorplanWithRooms is the full published document: both collections,
+// each an array of records carrying their own ids, with unmodelled keys.
+func publishedFloorplanWithRooms() map[string]any {
+	return map[string]any{
+		"floors": []any{
+			map[string]any{"id": "floor1", "name": "Lower Floor", "order": 1, "ceiling": 2.5},
+			map[string]any{"id": "floor2", "name": "Upper Floor", "order": 2, "ceiling": 2.5},
+		},
+		"rooms": []any{
+			map[string]any{
+				"id": "floor1.room-a", "name": "Room A", "floor": "floor1",
+				"category": "utility", "area": 12.4, "polygon": []any{1, 2, 3},
+			},
+			map[string]any{
+				"id": "floor1.room-c", "name": "Room C", "floor": "floor1",
+				"category": "plant", "area": 1.3,
+			},
+			// Declares no category or area: UNKNOWN, not guessed.
+			map[string]any{"id": "floor2.room-a", "name": "Room A", "floor": "floor2"},
+		},
+	}
+}
+
+func TestFetcher_RefreshPopulatesRooms(t *testing.T) {
+	mux := http.NewServeMux()
+	serveNamespace(mux, testNamespace, map[string]any{
+		"sensor_e": map[string]any{"class": "environmental_sensor", "floor": "floor1"},
+	})
+	serveNamespace(mux, testFloorplanNamespace, publishedFloorplanWithRooms())
+
+	f := floorplanFetcher(t, mux)
+	f.Refresh(context.Background())
+
+	rooms := f.Rooms()
+	if len(rooms) != 3 {
+		t.Fatalf("got %d rooms, want 3: %v", len(rooms), rooms)
+	}
+	a := rooms["floor1.room-a"]
+	if a.Name != "Room A" || a.Floor != "floor1" || a.Category != "utility" {
+		t.Errorf("floor1.room-a = %+v, want the declared name/floor/category", a)
+	}
+	if a.Area == nil || *a.Area != 12.4 {
+		t.Errorf("floor1.room-a area = %v, want 12.4", a.Area)
+	}
+	// The category that motivated the request: a plant room, relayed raw.
+	if got := rooms["floor1.room-c"].Category; got != "plant" {
+		t.Errorf("floor1.room-c category = %q, want plant relayed unchanged", got)
+	}
+	// Declares neither: UNKNOWN on both counts.
+	if r := rooms["floor2.room-a"]; r.Category != "" || r.Area != nil {
+		t.Errorf("floor2.room-a = %+v, want category empty and area nil", r)
+	}
+	// Both collections arrive from the one document.
+	if len(f.Floors()) != 2 {
+		t.Errorf("got %d floors, want 2 alongside the rooms", len(f.Floors()))
+	}
+}
+
+// Two rooms on different floors may share a name, and both must survive: the id
+// is the key, so a name collision is not a collision at all.
+func TestFetcher_RoomsWithTheSameNameBothSurvive(t *testing.T) {
+	mux := http.NewServeMux()
+	serveNamespace(mux, testNamespace, map[string]any{})
+	serveNamespace(mux, testFloorplanNamespace, publishedFloorplanWithRooms())
+
+	f := floorplanFetcher(t, mux)
+	f.Refresh(context.Background())
+
+	rooms := f.Rooms()
+	if rooms["floor1.room-a"].Name != rooms["floor2.room-a"].Name {
+		t.Fatal("fixture should have two rooms sharing a name")
+	}
+	if rooms["floor1.room-a"].Floor == rooms["floor2.room-a"].Floor {
+		t.Error("the two same-named rooms must keep their distinct floors")
+	}
+}
+
+// A document publishing floors but no rooms is legitimate — rooms are simply
+// UNKNOWN — and must not fail the whole fetch.
+func TestFetcher_FloorsWithoutRoomsIsFine(t *testing.T) {
+	mux := http.NewServeMux()
+	serveNamespace(mux, testNamespace, map[string]any{})
+	serveNamespace(mux, testFloorplanNamespace, map[string]any{
+		"floors": []any{map[string]any{"id": "floor1", "name": "Lower Floor"}},
+	})
+
+	f := floorplanFetcher(t, mux)
+	f.Refresh(context.Background())
+
+	if len(f.Floors()) != 1 {
+		t.Errorf("got %d floors, want 1", len(f.Floors()))
+	}
+	if len(f.Rooms()) != 0 {
+		t.Errorf("rooms = %v, want empty", f.Rooms())
+	}
+	if st := f.Statuses()[testFloorplanNamespace]; !st.OK {
+		t.Errorf("a floors-only document is a successful fetch: %+v", st)
+	}
+}
+
+// And the reverse: rooms with no floors. The wrapper is recognised by EITHER
+// collection being an array, so a rooms-only document is not mistaken for the
+// legacy map shape and does not fail trying to unmarshal an array into a
+// FloorConfig — which is exactly how #28's bug presented.
+func TestFetcher_RoomsWithoutFloorsIsFine(t *testing.T) {
+	mux := http.NewServeMux()
+	serveNamespace(mux, testNamespace, map[string]any{})
+	serveNamespace(mux, testFloorplanNamespace, map[string]any{
+		"rooms": []any{map[string]any{"id": "floor1.room-a", "name": "Room A"}},
+	})
+
+	f := floorplanFetcher(t, mux)
+	f.Refresh(context.Background())
+
+	if len(f.Rooms()) != 1 {
+		t.Fatalf("got %d rooms, want 1: %v", len(f.Rooms()), f.Rooms())
+	}
+	if st := f.Statuses()[testFloorplanNamespace]; !st.OK {
+		t.Errorf("a rooms-only document is a successful fetch: %+v", st)
+	}
+}
+
+// An id-less room record cannot be referenced by a device's `room` property or
+// matched by rooms=, so it is skipped rather than keyed on "" — the same rule
+// floors follow.
+func TestFetcher_RoomsSkipRecordsWithNoID(t *testing.T) {
+	mux := http.NewServeMux()
+	serveNamespace(mux, testNamespace, map[string]any{})
+	serveNamespace(mux, testFloorplanNamespace, map[string]any{
+		"rooms": []any{
+			map[string]any{"id": "floor1.room-a", "name": "Room A"},
+			map[string]any{"name": "Nameless"},
+		},
+	})
+
+	f := floorplanFetcher(t, mux)
+	f.Refresh(context.Background())
+
+	if len(f.Rooms()) != 1 {
+		t.Fatalf("want only the identified room, got %v", f.Rooms())
+	}
+	if _, ok := f.Rooms()[""]; ok {
+		t.Error(`a room was keyed on "", which rooms= can never match`)
+	}
+}
+
+// The legacy devices-style map shape carries FLOORS ONLY — there is no
+// room-shaped reading of it — so rooms stay UNKNOWN rather than being invented
+// from floor records.
+func TestFetcher_LegacyMapShapeYieldsNoRooms(t *testing.T) {
+	mux := http.NewServeMux()
+	serveNamespace(mux, testNamespace, map[string]any{})
+	serveNamespace(mux, testFloorplanNamespace, floorplanDoc())
+
+	f := floorplanFetcher(t, mux)
+	f.Refresh(context.Background())
+
+	if len(f.Floors()) != 3 {
+		t.Errorf("got %d floors, want the map shape still decoded", len(f.Floors()))
+	}
+	if len(f.Rooms()) != 0 {
+		t.Errorf("rooms = %v, want empty: the map shape publishes no rooms", f.Rooms())
+	}
+}
+
+// Rooms() returns a COPY, like Floors(): a caller mutating it must not corrupt
+// the snapshot every subsequent request is served from.
+func TestFetcher_RoomsReturnsACopy(t *testing.T) {
+	mux := http.NewServeMux()
+	serveNamespace(mux, testNamespace, map[string]any{})
+	serveNamespace(mux, testFloorplanNamespace, publishedFloorplanWithRooms())
+
+	f := floorplanFetcher(t, mux)
+	f.Refresh(context.Background())
+
+	got := f.Rooms()
+	delete(got, "floor1.room-a")
+	got["floor1.room-c"] = RoomConfig{Name: "tampered"}
+
+	fresh := f.Rooms()
+	if _, ok := fresh["floor1.room-a"]; !ok {
+		t.Error("deleting from the returned map mutated the held snapshot")
+	}
+	if fresh["floor1.room-c"].Name != "Room C" {
+		t.Errorf("floor1.room-c name = %q, want the snapshot untouched",
+			fresh["floor1.room-c"].Name)
+	}
+}
+
+// A failed refresh keeps the last-known ROOMS too, not just floors: they come
+// from one document and degrade together.
+func TestFetcher_FloorplanFailureKeepsLastKnownRooms(t *testing.T) {
+	mux := http.NewServeMux()
+	serveNamespace(mux, testNamespace, map[string]any{})
+	var fail bool
+	mux.HandleFunc("/api/v1/config/"+testFloorplanNamespace, func(w http.ResponseWriter, r *http.Request) {
+		if fail {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(publishedFloorplanWithRooms()) //nolint:errcheck
+	})
+
+	f := floorplanFetcher(t, mux)
+	f.Refresh(context.Background())
+	if len(f.Rooms()) != 3 {
+		t.Fatalf("first refresh: got %d rooms, want 3", len(f.Rooms()))
+	}
+
+	fail = true
+	f.Refresh(context.Background())
+
+	if len(f.Rooms()) != 3 {
+		t.Errorf("got %d rooms after a failed refresh, want the 3 last-known kept",
+			len(f.Rooms()))
+	}
+}
+
+// Concurrent reads of both collections during refresh must be race-free; this
+// runs under -race.
+func TestFetcher_RoomsConcurrentReadDuringRefresh(t *testing.T) {
+	mux := http.NewServeMux()
+	serveNamespace(mux, testNamespace, map[string]any{})
+	serveNamespace(mux, testFloorplanNamespace, publishedFloorplanWithRooms())
+
+	f := floorplanFetcher(t, mux)
+	f.Refresh(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 50; i++ {
+			_, _ = f.Rooms(), f.Floors()
+		}
+	}()
+	for i := 0; i < 50; i++ {
+		f.Refresh(context.Background())
+	}
+	<-done
+}

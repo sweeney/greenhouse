@@ -286,6 +286,14 @@ func roundTo(x float64, n int) float64 {
 // device's samples within a bucket inside Influx; the two do not commute. It is
 // irrelevant to group_by=device, which never combines members.
 //
+// groupLabels maps a group key to its human-readable display name, for grouped
+// modes only. A key with no entry, or an entry that is empty, keeps the key
+// itself as the label: greenhouse relays the floorplan's names and falls back to
+// the id rather than deriving a label from it. Key is ALWAYS the id — only Label
+// varies — so a caller matching on identity is unaffected by whether a name
+// happens to be published. Per-device series take their label from DisplayName
+// and ignore this entirely.
+//
 // field names the measurement being assembled, and is required because the
 // combine is not field-agnostic: a CIRCULAR field (wind direction) cannot be
 // arithmetically averaged across members — mean(350°, 10°) is 180° (South) when
@@ -305,6 +313,7 @@ func AssembleSeries(
 	groupBy string,
 	field string,
 	groupFn string,
+	groupLabels map[string]string,
 ) []Series {
 	n := len(buckets)
 	get := func(id string) []float64 {
@@ -327,7 +336,7 @@ func AssembleSeries(
 		groupFn = DefaultGroupFn
 	}
 	if Groups(groupBy) {
-		return assembleByGroup(buckets, devices, get, circular, groupBy, groupFn)
+		return assembleByGroup(buckets, devices, get, circular, groupBy, groupFn, groupLabels)
 	}
 	// device, and any unknown grouping, fall back to per-device.
 	return assembleByDevice(buckets, devices, get, circular)
@@ -447,6 +456,7 @@ func assembleByGroup(
 	get func(string) []float64,
 	circular bool,
 	groupBy, groupFn string,
+	groupLabels map[string]string,
 ) []Series {
 	keyOf := GroupKeyFor(groupBy)
 	if keyOf == nil {
@@ -484,7 +494,15 @@ func assembleByGroup(
 		if groupBy == GroupByRoom {
 			room = k
 		}
-		out = append(out, buildSeries(k, k, room, buckets, memberValues, circular, groupFn))
+		// The floorplan's name when it publishes one, the id otherwise. Never a
+		// label derived from the id — that transform is the client-side guesswork
+		// this exists to remove, and moving it into greenhouse would not make it
+		// any less of a guess.
+		label := k
+		if name := groupLabels[k]; name != "" {
+			label = name
+		}
+		out = append(out, buildSeries(k, label, room, buckets, memberValues, circular, groupFn))
 	}
 	return out
 }
@@ -610,7 +628,8 @@ func environmentalIDs(devices map[string]config.DeviceConfig) []string {
 //
 // bucket is the Influx bucket name; win the resolved window; iv the resolved
 // interval; field+fn the measurement to chart; groupBy the grouping mode;
-// groupFn how a group's members are combined; devices the inventory; loc the
+// groupFn how a group's members are combined; devices the inventory;
+// groupLabels the floorplan display names for grouped series keys; loc the
 // timezone. field/fn/groupFn are assumed pre-validated by the caller (FieldFor /
 // ValidFnForField / ValidGroupFn).
 //
@@ -625,6 +644,7 @@ func BuildSeries(
 	iv Interval,
 	field, fn, groupBy, groupFn string,
 	devices map[string]config.DeviceConfig,
+	groupLabels map[string]string,
 	loc *time.Location,
 ) (SeriesResponse, error) {
 	if loc == nil {
@@ -646,7 +666,7 @@ func BuildSeries(
 		demux(rows, idx, valueByDevice, len(buckets))
 	}
 
-	series := AssembleSeries(buckets, devices, valueByDevice, groupBy, field, groupFn)
+	series := AssembleSeries(buckets, devices, valueByDevice, groupBy, field, groupFn, groupLabels)
 
 	unit := ""
 	if f, ok := FieldFor(field); ok {

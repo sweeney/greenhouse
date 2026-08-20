@@ -17,12 +17,14 @@ import (
 // advertised a floor /series rejected, a client filling a picker from this
 // endpoint would build a broken control out of correct data.
 
-// fakeFloors is a static FloorProvider for handler tests.
+// fakeFloors is a static FloorplanProvider for handler tests.
 type fakeFloors struct {
 	floors map[string]config.FloorConfig
+	rooms  map[string]config.RoomConfig
 }
 
 func (f fakeFloors) Floors() map[string]config.FloorConfig { return f.floors }
+func (f fakeFloors) Rooms() map[string]config.RoomConfig   { return f.rooms }
 
 func intPtr(i int) *int         { return &i }
 func f64Ptr(f float64) *float64 { return &f }
@@ -66,7 +68,7 @@ func floorSetupCatalog(t *testing.T) *Server {
 	t.Helper()
 	s, _ := dataSetup(t)
 	s.Config = fakeConfig{devices: catalogFloorDevices()}
-	s.FloorRecords = fakeFloors{floors: catalogFloorRecords()}
+	s.Floorplan = fakeFloors{floors: catalogFloorRecords()}
 	return s
 }
 
@@ -246,7 +248,7 @@ func TestFloors_NegativeOrderSortsFirst(t *testing.T) {
 		"sensor_e": {Class: "environmental_sensor", Floor: "floor1"},
 		"sensor_b": {Class: "environmental_sensor", Floor: "basement"},
 	}}
-	s.FloorRecords = fakeFloors{floors: map[string]config.FloorConfig{
+	s.Floorplan = fakeFloors{floors: map[string]config.FloorConfig{
 		"floor1":   {Order: intPtr(1)},
 		"basement": {Order: intPtr(-1)},
 	}}
@@ -265,7 +267,7 @@ func TestFloors_ZeroOrderSortsAsDeclared(t *testing.T) {
 		"sensor_e": {Class: "environmental_sensor", Floor: "ground"},
 		"sensor_f": {Class: "environmental_sensor", Floor: "unknown_order"},
 	}}
-	s.FloorRecords = fakeFloors{floors: map[string]config.FloorConfig{
+	s.Floorplan = fakeFloors{floors: map[string]config.FloorConfig{
 		"ground": {Order: intPtr(0)},
 		// unknown_order deliberately has no record.
 	}}
@@ -287,7 +289,7 @@ func TestFloors_TiedOrdersFallBackToID(t *testing.T) {
 		"sensor_e": {Class: "environmental_sensor", Floor: "floor_b"},
 		"sensor_f": {Class: "environmental_sensor", Floor: "floor_a"},
 	}}
-	s.FloorRecords = fakeFloors{floors: map[string]config.FloorConfig{
+	s.Floorplan = fakeFloors{floors: map[string]config.FloorConfig{
 		"floor_a": {Order: intPtr(1)},
 		"floor_b": {Order: intPtr(1)},
 	}}
@@ -304,7 +306,7 @@ func TestFloors_TiedOrdersFallBackToID(t *testing.T) {
 // all-unknown case where only the id tiebreak applies.
 func TestFloors_DeterministicWithNoRecordsAtAll(t *testing.T) {
 	s := floorSetupCatalog(t)
-	s.FloorRecords = nil
+	s.Floorplan = nil
 
 	for i := 0; i < 50; i++ {
 		got := getFloors(t, s)
@@ -322,7 +324,7 @@ func TestFloors_DeterministicWithNoRecordsAtAll(t *testing.T) {
 // floorplan must never stop a climate service serving climate.
 func TestFloors_NilProviderStillListsFloors(t *testing.T) {
 	s := floorSetupCatalog(t)
-	s.FloorRecords = nil
+	s.Floorplan = nil
 
 	got := getFloors(t, s)
 	if len(got) != 3 {
@@ -341,7 +343,7 @@ func TestFloors_NilProviderStillListsFloors(t *testing.T) {
 // An empty floorplan snapshot behaves identically to no provider.
 func TestFloors_EmptyRecordsBehaveAsNilProvider(t *testing.T) {
 	s := floorSetupCatalog(t)
-	s.FloorRecords = fakeFloors{floors: map[string]config.FloorConfig{}}
+	s.Floorplan = fakeFloors{floors: map[string]config.FloorConfig{}}
 
 	if got := getFloors(t, s); len(got) != 3 {
 		t.Fatalf("want 3 floors, got %v", got)

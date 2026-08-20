@@ -36,6 +36,7 @@ requires a Bearer JWT (user **or** service token).
 | `GET /openapi.json` | the OpenAPI spec as JSON |
 | `GET /devices` | climate device catalog: id, display_name, room, floor, class, and an `environment_fields` hint |
 | `GET /floors` | floor catalog: id, name, order, elevation, device_count — the vocabulary `floors=` accepts |
+| `GET /rooms` | room catalog: id, name, floor, category, area, device_count — the vocabulary `rooms=` accepts |
 | `GET /devices/{id}/series` | single-device, single-field time-series |
 | `GET /series` | multi-series; `group_by` device (default), room or floor, combined per `group_fn` |
 | `GET /devices/{id}/latest` | the device's most recent reading across its fields (within the last 7 days) |
@@ -72,7 +73,10 @@ requires a Bearer JWT (user **or** service token).
   offered (non-additive). Bad fn → 400. `wind_dir_deg` is **circular** (a 0–360°
   bearing): arithmetic mean/min/max are wrong on an angular axis, so it accepts
   only `last` (and defaults to it); `mean`/`min`/`max` for it → 400.
-- `group_by` — `device` (default) \| `room` \| `floor`. Bad value → 400. A device
+- `group_by` — `device` (default) \| `room` \| `floor`. A grouped series is
+  **labelled** with the floorplan's name for that room or floor, falling back to the
+  id when it declares none (or no floorplan namespace is configured). `key` is always
+  the id — only `label` varies — so identity matching is unaffected. Bad value → 400. A device
   declaring no room (for `room`) or no floor (for `floor`) has UNKNOWN membership
   and is **omitted** rather than keyed on `""`; `group_by=device` charts it. A
   **circular** field cannot be combined across a group's members at all, so
@@ -267,6 +271,27 @@ position, for the same reason it never derives a device's floor from its room id
 Rows come back in declared `order` ascending, then by id, so undeclared ones sort last
 and the list renders top to bottom without a client re-sorting it.
 
+`GET /rooms` is the room-shaped sibling, and the same argument one level down.
+`group_by=room` used to label every series with the bare room id, so every client wrote
+the same function — split on the dot, replace hyphens, title-case, hope — which is wrong
+for any room whose display name is not a mechanical transform of its slug and silently
+stops matching the floorplan the moment a room is renamed. It also publishes each room's
+**`category`** (`kitchen`, `circulation`, `plant`, …), which is how a client tells a
+plant room from a living space without matching substrings against the id.
+
+`category` is relayed **raw** and deliberately not reduced to a computed flag like
+`is_living_space`. Whether a plant room "counts" is a per-client policy question, not a
+fact about the room: a floor-mean view excludes it, a "where is the heat going?" view
+wants it, and an equipment view wants only it. A boolean would bake the first caller's
+answer into the API and leave the other two working around it. The floorplan owns the
+taxonomy, greenhouse relays it, clients interpret it.
+
+Which rooms are listed follows `/floors` exactly: the rooms at least one climate device
+sits in, which is the set `rooms=` accepts, so a picker built from it cannot 400. Room
+`name`s are **not unique** — two rooms on different floors may share one — so `id` is the
+key, and a client wanting an unambiguous label joins `/rooms` to `/floors` on the room's
+`floor`.
+
 `/series` accepts `floors=` for the same vocabulary, so a floor read off the catalog
 can be handed straight back as a filter, and `group_by=floor` charts it as one line
 (see **Charting a floor**). A device with a declared floor but no room id is absent
@@ -292,19 +317,25 @@ Greenhouse refuses to start when it is unset instead, because boot is the only p
 that can still tell "unnamed" apart from "named and empty".
 
 `floorplan_namespace` is **optional**, and deliberately so. Greenhouse charts devices; a
-floor's label and storey order are presentation detail. Unset, `/floors` still lists every
-floor that holds a climate sensor — with `name` and `order` reported as unknown — and a
-fetch failure is fail-open and never touches the devices snapshot. A missing floorplan can
+room or floor's label, storey order and category are presentation detail. Unset, `/floors`
+and `/rooms` still list everything that holds a climate sensor — with `name`, `order` and
+`category` reported as unknown, and grouped series still labelled by id — and a fetch
+failure is fail-open and never touches the devices snapshot. A missing floorplan can
 degrade the labels; it can never stop a climate service serving climate.
 
 The floorplan document is an **array**, unlike the devices namespace's map keyed by id:
 
 ```json
-{ "floors": [ { "id": "floor1", "name": "Lower Floor", "order": 1, "elevation": 0.0 } ] }
+{
+  "floors": [ { "id": "floor1", "name": "Lower Floor", "order": 1, "elevation": 0.0 } ],
+  "rooms":  [ { "id": "floor1.room-a", "name": "Room A", "floor": "floor1",
+                "category": "utility", "area": 12.4 } ]
+}
 ```
 
-Greenhouse also accepts the devices-style `{"<id>": {…}}` form, because the namespace
-belongs to another service and greenhouse cannot deploy in lockstep with it. Unmodelled
+It carries the building's **rooms** in the same shape, under a `rooms` key. Greenhouse
+also accepts the devices-style `{"<id>": {…}}` form — which carries floors only — because
+the namespace belongs to another service and greenhouse cannot deploy in lockstep with it. Unmodelled
 keys are ignored. Assuming it matched the devices shape is what silently broke `/floors`
 in prod (#28) — the decode failed, fail-open kept an empty snapshot, and the response was
 byte-identical to a namespace nobody had configured.

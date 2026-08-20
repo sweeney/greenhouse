@@ -15,6 +15,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/sweeney/greenhouse/internal/climate"
 	"github.com/sweeney/greenhouse/internal/config"
 	"github.com/sweeney/greenhouse/internal/influx"
 	"github.com/sweeney/greenhouse/internal/testutil"
@@ -32,14 +33,24 @@ type ConfigProvider interface {
 	Devices() map[string]config.DeviceConfig
 }
 
-// FloorProvider supplies the floor records behind /floors. The Fetcher satisfies
-// it; tests inject a fake. It is OPTIONAL — Server.FloorRecords may be nil, and
-// then /floors still lists every floor that holds a climate sensor with name and
-// order reported as unknown. Floor labels are presentation detail, so a missing
-// floorplan must never stop a climate service serving climate.
-type FloorProvider interface {
-	// Floors returns the current floorplan snapshot keyed by floor id.
+// FloorplanProvider supplies the floorplan snapshot behind /floors and /rooms,
+// and the display names grouped series are labelled with. The Fetcher satisfies
+// it; tests inject a fake.
+//
+// It is OPTIONAL — Server.Floorplan may be nil, and then both catalogs still
+// list everything that holds a climate sensor, with names, order and category
+// reported as unknown, and grouped series stay labelled by id. Floorplan detail
+// is presentation, so a missing one must never stop a climate service serving
+// climate.
+//
+// One interface rather than two because both collections come from one document
+// in one namespace: splitting them would let a caller hold half a floorplan and
+// suggest the halves can be configured independently, which they cannot.
+type FloorplanProvider interface {
+	// Floors returns the current floor records keyed by floor id.
 	Floors() map[string]config.FloorConfig
+	// Rooms returns the current room records keyed by floorplan room id.
+	Rooms() map[string]config.RoomConfig
 }
 
 // ConfigStatus surfaces the remote-config fetcher's per-namespace status for
@@ -106,11 +117,12 @@ type Server struct {
 	// (data handlers require it).
 	Config ConfigProvider
 
-	// FloorRecords supplies floor names and storey order for /floors. The real
-	// impl is the Fetcher; tests inject a fake. May be nil (and is, whenever no
-	// floorplan namespace is configured) — /floors then reports every floor's
-	// name and order as unknown rather than failing.
-	FloorRecords FloorProvider
+	// Floorplan supplies floor and room records for /floors, /rooms and the
+	// labels on grouped series. The real impl is the Fetcher; tests inject a
+	// fake. May be nil (and is, whenever no floorplan namespace is configured) —
+	// the catalogs then report names, order and category as unknown, and grouped
+	// series stay labelled by id, rather than failing.
+	Floorplan FloorplanProvider
 
 	// RemoteConfig surfaces per-namespace remote-config fetch status on
 	// /healthz. The real impl is the Fetcher (which satisfies ConfigStatus);
@@ -136,10 +148,45 @@ func (s *Server) clock() testutil.Clock {
 // configured. A nil map reads as empty, so /floors degrades to "every floor is
 // unknown" rather than panicking on an instance with no floorplan namespace.
 func (s *Server) floors() map[string]config.FloorConfig {
-	if s.FloorRecords == nil {
+	if s.Floorplan == nil {
 		return nil
 	}
-	return s.FloorRecords.Floors()
+	return s.Floorplan.Floors()
+}
+
+// rooms returns the current room records, nil-safe for the same reason as floors.
+func (s *Server) rooms() map[string]config.RoomConfig {
+	if s.Floorplan == nil {
+		return nil
+	}
+	return s.Floorplan.Rooms()
+}
+
+// groupLabels maps each group key to the floorplan's display name for it, for
+// whichever grouping the request asked for. Keys the floorplan does not name are
+// absent, and the assembly step then labels those series by id.
+//
+// Built per request from the live snapshot rather than cached, so a SIGHUP
+// reload is reflected immediately. Labels are cosmetic, so no attempt is made to
+// pin them to the same instant as the device snapshot: the worst a reload racing
+// a request can produce is a series labelled by its id for one response.
+func (s *Server) groupLabels(groupBy string) map[string]string {
+	out := map[string]string{}
+	switch groupBy {
+	case climate.GroupByRoom:
+		for id, r := range s.rooms() {
+			if r.Name != "" {
+				out[id] = r.Name
+			}
+		}
+	case climate.GroupByFloor:
+		for id, f := range s.floors() {
+			if f.Name != "" {
+				out[id] = f.Name
+			}
+		}
+	}
+	return out
 }
 
 // loc returns the configured timezone, defaulting to UTC.
@@ -180,6 +227,7 @@ func newMux(s *Server) *http.ServeMux {
 	mux.Handle("GET /devices/{id}/latest", authmw(http.HandlerFunc(s.handleDeviceLatest)))
 	mux.Handle("GET /series", authmw(http.HandlerFunc(s.handleSeries)))
 	mux.Handle("GET /floors", authmw(http.HandlerFunc(s.handleFloors)))
+	mux.Handle("GET /rooms", authmw(http.HandlerFunc(s.handleRooms)))
 	mux.Handle("GET /fields", authmw(http.HandlerFunc(s.handleFields)))
 	return mux
 }

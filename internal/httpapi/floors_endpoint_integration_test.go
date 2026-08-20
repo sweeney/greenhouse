@@ -24,7 +24,7 @@ func floorsIntegrationServer(t *testing.T) (base, token string, q *influx.FakeQu
 
 	s, q := dataSetup(t)
 	s.Config = fakeConfig{devices: catalogFloorDevices()}
-	s.FloorRecords = fakeFloors{floors: catalogFloorRecords()}
+	s.Floorplan = fakeFloors{floors: catalogFloorRecords()}
 	s.PublicURL = "https://greenhouse.swee.net"
 
 	priv := genTestKey(t)
@@ -219,7 +219,7 @@ func TestIntegration_FloorWithNoRecordIsStillUsable(t *testing.T) {
 func TestIntegration_NoFloorplanConfiguredStillServesFloors(t *testing.T) {
 	s, q := dataSetup(t)
 	s.Config = fakeConfig{devices: catalogFloorDevices()}
-	s.FloorRecords = nil // no floorplan_namespace set
+	s.Floorplan = nil // no floorplan_namespace set
 
 	priv := genTestKey(t)
 	const kid = "nofloorplan"

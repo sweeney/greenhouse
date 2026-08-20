@@ -155,7 +155,7 @@ func buildReplayed(t *testing.T, win Window, iv Interval, loc *time.Location) (S
 			return replayAggregateWindow(dev, samples, win.Start, win.Stop, iv, loc), nil
 		},
 	}
-	resp, err := BuildSeries(context.Background(), q, "statehouse", win, iv, "temperature_c", "mean", GroupByDevice, DefaultGroupFn, devices, loc)
+	resp, err := BuildSeries(context.Background(), q, "statehouse", win, iv, "temperature_c", "mean", GroupByDevice, DefaultGroupFn, devices, nil, loc)
 	if err != nil {
 		t.Fatalf("BuildSeries: %v", err)
 	}
@@ -316,7 +316,7 @@ func TestBuildSeries_HeatingRampLandsInTheRightHour(t *testing.T) {
 			return replayAggregateWindow(dev, samples, win.Start, win.Stop, iv, loc), nil
 		},
 	}
-	resp, err := BuildSeries(context.Background(), q, "statehouse", win, iv, "temperature_c", "mean", GroupByDevice, DefaultGroupFn, devices, loc)
+	resp, err := BuildSeries(context.Background(), q, "statehouse", win, iv, "temperature_c", "mean", GroupByDevice, DefaultGroupFn, devices, nil, loc)
 	if err != nil {
 		t.Fatalf("BuildSeries: %v", err)
 	}
