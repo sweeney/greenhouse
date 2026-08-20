@@ -71,6 +71,16 @@ shapes, the Influx Querier + fake, the Server/auth/CORS/spec skeleton, the confi
   tested against. `name`/`order`/`elevation` are passed through and nullable — 0 is a real
   order (a basement) and 0.0 a real elevation, which is why `Order`/`Elevation` are
   pointers.
+- **The floorplan namespace is an ARRAY, not a keyed map** — unlike the devices
+  namespace, and this is the one fact about it that is easy to get wrong. It publishes
+  `{"floors": [{"id": …, "name": …, "order": …}, …]}`, each record carrying its own id.
+  `config.floorplanDocument` also accepts the devices-style `{"<id>": {…}}` because the
+  namespace belongs to another service greenhouse cannot deploy in lockstep with, and it
+  discriminates on JSON *type* rather than key name (a `floors` key holding an OBJECT is a
+  floor whose id is `floors`). Assuming it matched the devices shape silently broke
+  `/floors` in prod (#28): the decode failed, fail-open kept an empty snapshot, and the
+  response was byte-identical to an unconfigured namespace. Never re-derive the shape from
+  the devices namespace — that guess is what this documents against.
 - **`site.floorplan_namespace` is OPTIONAL** (unlike `devices_namespace`, which is required
   with no default). Greenhouse charts devices; floor labels are presentation detail. Unset
   is silent — no request, no `/healthz` status — and a configured-but-failing floorplan is
