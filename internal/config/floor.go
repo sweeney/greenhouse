@@ -78,7 +78,11 @@ func normaliseFloors(floors map[string]FloorConfig) {
 //
 // The shapes are told apart by JSON type, not by key name: a "floors" key
 // holding an object is a floor whose id happens to be "floors", and decodes as
-// the map shape. The map shape carries FLOORS ONLY — it predates rooms being
+// the map shape — PROVIDED no sibling "rooms" array is present. When one is, the
+// wrapper branch wins and that object is not read as a floor. The case needs a
+// floor literally named "floors" alongside a rooms array, which has never
+// existed; it is documented rather than handled so the rule is not read as
+// broader than it is. The map shape carries FLOORS ONLY — it predates rooms being
 // published and there is no room-shaped reading of it, so Rooms is empty there
 // and every room's name and category are honestly UNKNOWN rather than guessed.
 // Unmodelled keys (e.g. "ceiling") are ignored throughout.

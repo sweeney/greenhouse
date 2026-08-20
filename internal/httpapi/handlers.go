@@ -640,17 +640,12 @@ type floorEntry struct {
 func (s *Server) handleFloors(w http.ResponseWriter, _ *http.Request) {
 	records := s.floors()
 
-	counts := map[string]int{}
-	for _, dev := range s.Config.Devices() {
-		if !dev.ReportsEnvironment() {
-			continue
-		}
-		// An undeclared floor is UNKNOWN, not a floor of its own: it is never
-		// listed and never matched by floors=. See config.DeviceConfig.Floor.
-		if dev.Floor != "" {
-			counts[dev.Floor]++
-		}
-	}
+	// The key function comes from climate.GroupKeyFor, so this listing cannot
+	// disagree with floors= or group_by=floor about which floor a device is on:
+	// they are the same function, not two expressions that happen to match. An
+	// empty key is UNKNOWN — never listed, never matched by floors=. See
+	// config.DeviceConfig.Floor.
+	counts := countDevicesByGroupKey(s.Config.Devices(), climate.GroupByFloor)
 
 	out := make([]floorEntry, 0, len(counts))
 	for id, n := range counts {
@@ -662,16 +657,7 @@ func (s *Server) handleFloors(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	sort.Slice(out, func(i, j int) bool {
-		a, b := out[i], out[j]
-		switch {
-		case a.Order != nil && b.Order != nil && *a.Order != *b.Order:
-			return *a.Order < *b.Order
-		case a.Order != nil && b.Order == nil:
-			return true // a declared position sorts before an unknown one
-		case a.Order == nil && b.Order != nil:
-			return false
-		}
-		return a.ID < b.ID
+		return floorPrecedes(records, out[i].ID, out[j].ID)
 	})
 
 	writeJSON(w, http.StatusOK, map[string]any{"floors": out})
@@ -691,6 +677,13 @@ type roomEntry struct {
 	// declares none. Passed through from the room record — never read out of the
 	// id's "<floor>.<slug>" shape, and never inferred from the floors this
 	// room's devices declare.
+	//
+	// NOT guaranteed to appear in /floors or to be accepted by floors=. That
+	// listing is built from the floors DEVICES declare; this relays what the ROOM
+	// record declares, and greenhouse does not arbitrate between two upstream
+	// declarations. They diverge whenever a device has a room but no declared
+	// floor, which config.DeviceConfig.Floor explicitly allows. A client joining
+	// /rooms to /floors must handle a miss.
 	Floor string `json:"floor"`
 	// Category is the room's purpose as the floorplan classifies it, e.g.
 	// "kitchen", "circulation", "plant". Relayed RAW rather than reduced to a
@@ -730,19 +723,11 @@ type roomEntry struct {
 func (s *Server) handleRooms(w http.ResponseWriter, _ *http.Request) {
 	records := s.rooms()
 
-	counts := map[string]int{}
-	for _, dev := range s.Config.Devices() {
-		if !dev.ReportsEnvironment() {
-			continue
-		}
-		// Place() is the same room the catalog, rooms= and group_by=room use, so
-		// this listing cannot disagree with any of them. An empty place is
-		// UNKNOWN — the device is charted by group_by=device and belongs to no
-		// room here.
-		if p := dev.Place(); p != "" {
-			counts[p]++
-		}
-	}
+	// Same rule, same source: climate.GroupKeyFor is what rooms= and
+	// group_by=room key on, so this listing agrees with them by construction. An
+	// empty key is UNKNOWN — the device is charted by group_by=device and belongs
+	// to no room here.
+	counts := countDevicesByGroupKey(s.Config.Devices(), climate.GroupByRoom)
 
 	floors := s.floors()
 	out := make([]roomEntry, 0, len(counts))
@@ -765,12 +750,42 @@ func (s *Server) handleRooms(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"rooms": out})
 }
 
-// floorPrecedes reports whether floor a sorts before floor b, by the same rule
-// /floors uses: declared storey order ascending, undeclared last, ties broken by
-// id. Shared so the two catalogs cannot order the same floors differently.
+// countDevicesByGroupKey counts the CLIMATE devices in each group under groupBy,
+// keyed by climate.GroupKeyFor — the single definition of "which devices share a
+// series". Devices whose key is empty have UNKNOWN membership and are counted
+// nowhere, so a catalog never lists a group the corresponding filter rejects.
+//
+// Deliberately only the counting: /floors and /rooms differ in entry type and in
+// what they enrich from, so sharing more than this would need a type parameter
+// and a callback to save a handful of lines. The key function is the part that
+// must not drift.
+func countDevicesByGroupKey(devices map[string]config.DeviceConfig, groupBy string) map[string]int {
+	keyOf := climate.GroupKeyFor(groupBy)
+	counts := map[string]int{}
+	for _, dev := range devices {
+		if !dev.ReportsEnvironment() {
+			continue
+		}
+		if k := keyOf(dev); k != "" {
+			counts[k]++
+		}
+	}
+	return counts
+}
+
+// floorPrecedes reports whether floor a sorts before floor b: declared storey
+// order ascending, undeclared last, ties broken by id. Both catalogs sort
+// through it, so they cannot order the same floors differently.
 //
 // A room whose floor is UNKNOWN ("") sorts after every known floor rather than
 // first, so unplaced rooms gather at the end instead of leading the list.
+//
+// A floor named by a room record but absent from floors — possible, because
+// /floors lists the floors DEVICES declare while a room relays what its own
+// record declares (see roomEntry.Floor) — lands on the zero FloorConfig and so
+// has no order. That is deliberate, not incidental: such a floor is genuinely
+// unordered as far as greenhouse knows, so it sorts with the other order-less
+// floors rather than being given a position nobody published.
 func floorPrecedes(floors map[string]config.FloorConfig, a, b string) bool {
 	if a == "" || b == "" {
 		return a != "" // a known floor precedes an unknown one

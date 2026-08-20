@@ -609,3 +609,120 @@ func TestSeries_GroupByRoomLabelsInRowsShape(t *testing.T) {
 		t.Error("no floor1.room-a in the rows series metadata")
 	}
 }
+
+// The tightest expression of the catalog's contract: /rooms lists exactly the
+// keys group_by=room produces. The filter direction is covered by
+// TestRooms_EveryListedRoomIsAcceptedByTheFilter; this is the grouping
+// direction, and it is what would break first if the catalog and the assembly
+// step ever stopped keying devices through climate.GroupKeyFor.
+func TestRooms_ListingEqualsTheGroupByRoomKeySet(t *testing.T) {
+	s, _ := roomSetup(t)
+
+	catalog := map[string]bool{}
+	for _, r := range getRooms(t, s) {
+		catalog[r.ID] = true
+	}
+
+	series := map[string]bool{}
+	for key := range seriesLabels(t, s, "group_by=room") {
+		series[key] = true
+	}
+
+	for k := range catalog {
+		if !series[k] {
+			t.Errorf("%q is listed by /rooms but produces no group_by=room series", k)
+		}
+	}
+	for k := range series {
+		if !catalog[k] {
+			t.Errorf("%q is a group_by=room series but /rooms omits it", k)
+		}
+	}
+}
+
+// The same agreement for floors, since both catalogs now key through the same
+// function and a regression would hit them together.
+func TestFloors_ListingEqualsTheGroupByFloorKeySet(t *testing.T) {
+	s, _ := roomSetup(t)
+
+	catalog := map[string]bool{}
+	for _, f := range getFloors(t, s) {
+		catalog[f.ID] = true
+	}
+
+	series := map[string]bool{}
+	for key := range seriesLabels(t, s, "group_by=floor") {
+		series[key] = true
+	}
+
+	for k := range catalog {
+		if !series[k] {
+			t.Errorf("%q is listed by /floors but produces no group_by=floor series", k)
+		}
+	}
+	for k := range series {
+		if !catalog[k] {
+			t.Errorf("%q is a group_by=floor series but /floors omits it", k)
+		}
+	}
+}
+
+// A room's `floor` is what the ROOM record declares; /floors lists the floors
+// DEVICES declare. Greenhouse does not arbitrate between two upstream
+// declarations, so the two diverge whenever a device has a room but no declared
+// floor — the case config.DeviceConfig.Floor explicitly allows.
+//
+// Pinned because the README recommends joining /rooms to /floors for an
+// unambiguous label, so the miss is a documented client path rather than a
+// curiosity. The behaviour is deliberate; this test exists so it stays
+// deliberate, and so the docs describing it cannot quietly stop being true.
+func TestRooms_FloorMayBeAbsentFromTheFloorsCatalog(t *testing.T) {
+	s, _ := dataSetup(t)
+	s.Config = fakeConfig{devices: map[string]config.DeviceConfig{
+		// Sits in a room, declares no floor of its own.
+		"sensor_p": {Class: "environmental_sensor", Room: "floor3.room-a"},
+	}}
+	s.Floorplan = fakeFloors{
+		floors: map[string]config.FloorConfig{
+			"floor3": {ID: "floor3", Name: "Top Floor", Order: intPtr(3)},
+		},
+		rooms: map[string]config.RoomConfig{
+			"floor3.room-a": {ID: "floor3.room-a", Name: "Attic", Floor: "floor3"},
+		},
+	}
+
+	rooms := getRooms(t, s)
+	if len(rooms) != 1 || rooms[0].Floor != "floor3" {
+		t.Fatalf("want the room relaying its record's floor, got %+v", rooms)
+	}
+
+	// /floors is built from what devices declare, and this device declares none.
+	if got := getFloors(t, s); len(got) != 0 {
+		t.Errorf("/floors = %v, want empty: no device declares a floor", got)
+	}
+
+	// So the floor the room names is not a floors= value.
+	w := doGET(t, s, "/series?window=today&interval=1h&floors=floor3")
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("floors=floor3: want 400, got %d: %s", w.Code, w.Body.String())
+	}
+
+	// The documented client fallback still yields a usable label.
+	floorNames := map[string]string{}
+	for _, f := range getFloors(t, s) {
+		floorNames[f.ID] = f.Name
+	}
+	label := rooms[0].Name
+	if fn := floorNames[rooms[0].Floor]; fn != "" {
+		label = fn + " — " + rooms[0].Name
+	}
+	if label != "Attic" {
+		t.Errorf("fallback label = %q, want the bare room name when the join misses", label)
+	}
+
+	// And the room is still chartable under its own id — the divergence costs
+	// the floor join, never the room itself.
+	if w := doGET(t, s, "/series?window=today&interval=1h&rooms=floor3.room-a"); w.Code != http.StatusOK {
+		t.Errorf("rooms=floor3.room-a: want 200, got %d: %s", w.Code, w.Body.String())
+	}
+}

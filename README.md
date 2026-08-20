@@ -292,6 +292,13 @@ sits in, which is the set `rooms=` accepts, so a picker built from it cannot 400
 key, and a client wanting an unambiguous label joins `/rooms` to `/floors` on the room's
 `floor`.
 
+That join **can miss**, and a client must handle it. `/floors` lists the floors a climate
+*device* declares; a room's `floor` is what the *room record* declares. Greenhouse does not
+arbitrate between two upstream declarations, so the two diverge whenever a device has a
+room but no declared floor — `/rooms` will name a floor that `/floors` omits and `floors=`
+rejects with a 400. Fall back to the room name alone. For the same reason, a floor's rooms'
+`device_count`s need not sum to that floor's `device_count`.
+
 `/series` accepts `floors=` for the same vocabulary, so a floor read off the catalog
 can be handed straight back as a filter, and `group_by=floor` charts it as one line
 (see **Charting a floor**). A device with a declared floor but no room id is absent

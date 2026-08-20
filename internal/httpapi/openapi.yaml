@@ -274,7 +274,9 @@ paths:
 
         Note `name` is NOT unique — two rooms on different floors may share one.
         `id` is the key; a client wanting an unambiguous label composes the
-        floor's name (from /floors) with the room's.
+        floor's name (from /floors) with the room's — handling the case where the
+        room's `floor` is absent from /floors, which `floor`'s own description
+        explains.
 
         Ordered by floor as /floors orders it (declared storey order, then floor
         id), then by room id. Rooms whose floor is unknown sort last together.
@@ -920,6 +922,15 @@ components:
             when it declares none. Never read out of the room id's
             "<floor>.<slug>" shape, and never inferred from the floors this
             room's devices declare.
+
+            NOT guaranteed to appear in /floors, nor to be accepted by `floors=`.
+            Those list the floors a climate DEVICE declares; this relays what the
+            ROOM record declares, and greenhouse does not arbitrate between two
+            upstream declarations. They diverge whenever a device has a room but
+            no declared floor. A client joining /rooms to /floors must handle a
+            miss — fall back to the room name alone. For the same reason, the
+            device_counts of a floor's rooms need not sum to that floor's
+            device_count in /floors.
         category:
           type: string
           description: >
