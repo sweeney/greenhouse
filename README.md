@@ -155,6 +155,20 @@ be stale — if a sensor starts reporting a new field before the namespace catch
 up, greenhouse must not turn that oversight into a data outage. It only ever
 narrows on a positive declaration.
 
+### Browser access
+
+Every response carries `Access-Control-Allow-Origin: *`, and preflight (`OPTIONS`)
+is answered before auth runs, since a preflight carries no `Authorization` header.
+The wildcard is safe because the API authenticates by **Bearer token, not cookies**,
+so no `Access-Control-Allow-Credentials` is involved.
+
+Responses also carry `Timing-Allow-Origin: *`. CORS does not imply it: without it a
+cross-origin consumer's `PerformanceResourceTiming` entry has every phase (DNS, TCP,
+TLS, TTFB) and both transfer sizes zeroed, leaving only total duration — so a
+dashboard measuring greenhouse cannot tell a slow query from a slow network. The
+same token reasoning makes the wildcard safe here: a page with no token can only
+time its own 401, and a page with one is already reading the body it is measuring.
+
 ## Aggregation
 
 ### Two aggregation axes: `fn` then `group_fn`
