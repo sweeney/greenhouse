@@ -249,3 +249,67 @@ func TestDevices_TargetCarriesNoVerdict(t *testing.T) {
 		}
 	}
 }
+
+// --- the documented chartable-vs-ambient asymmetry ---
+//
+// `rooms=`/`floors=` validate against the CHARTABLE set while /rooms and /floors
+// list the AMBIENT one, so a probe-only room is accepted by the filter yet
+// absent from the catalog. The README and the spec both promise this gap runs in
+// exactly one direction — the catalog is never WIDER than the filter — because
+// that is what stops a picker built from the catalog producing a 400.
+
+// The filter accepts a probe-only room even though /rooms does not list it.
+func TestSeries_RoomsFilterAcceptsAProbeOnlyRoom(t *testing.T) {
+	s, _ := probeAPISetup(t)
+
+	w := doGET(t, s, "/series?rooms=cellar.store&window=today")
+	if w.Code != http.StatusOK {
+		t.Fatalf("rooms=cellar.store: want 200 (it holds a chartable probe), got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestSeries_FloorsFilterAcceptsAProbeOnlyFloor(t *testing.T) {
+	s, _ := probeAPISetup(t)
+
+	w := doGET(t, s, "/series?floors=cellar&window=today")
+	if w.Code != http.StatusOK {
+		t.Fatalf("floors=cellar: want 200 (it holds a chartable probe), got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+// ...and grouping that room yields NO series rather than one keyed on a freezer
+// interior. 200-with-nothing, not a 400 and not an invented ambient reading.
+func TestSeries_GroupByRoomOnAProbeOnlyRoomIsEmpty(t *testing.T) {
+	s, _ := probeAPISetup(t)
+
+	w := doGET(t, s, "/series?rooms=cellar.store&group_by=room&window=today")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Series []struct {
+			Key string `json:"key"`
+		} `json:"series"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode %s: %v", w.Body.String(), err)
+	}
+	if len(resp.Series) != 0 {
+		t.Errorf("want no series for a room with no ambient member, got %d: %+v", len(resp.Series), resp.Series)
+	}
+}
+
+// The direction that must never reverse: every room the catalog lists has to be
+// one the filter accepts. If this ever fails, a picker built from /rooms can
+// produce a 400 — the exact failure both catalogs exist to prevent.
+func TestRooms_CatalogIsNeverWiderThanTheFilter(t *testing.T) {
+	s, _ := probeAPISetup(t)
+
+	for _, r := range getRooms(t, s) {
+		w := doGET(t, s, "/series?rooms="+r.ID+"&window=today")
+		if w.Code != http.StatusOK {
+			t.Errorf("/rooms lists %q but rooms=%s returns %d — the catalog must never be wider than the filter",
+				r.ID, r.ID, w.Code)
+		}
+	}
+}

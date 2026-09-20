@@ -472,6 +472,12 @@ components:
         average" and fn=max&group_fn=mean is "the mean of each member's peak" —
         both legitimate, and different numbers.
 
+        A group's MEMBERS are its AMBIENT devices — the ones whose readings
+        describe the space being summarised. An `appliance_probe` is charted but
+        never a member, because it reports an appliance interior rather than the
+        room it stands in; see GET /devices. A group left with no ambient member
+        yields no series rather than an empty one.
+
         min/max make a group's spread visible instead of averaging it away: a
         floor charted as min, mean and max renders as a band whose WIDTH is the
         difference between its warmest and coldest room. Non-reporting members are
@@ -498,6 +504,11 @@ components:
         those climate sensors; omit for all climate devices. An unknown id, or an
         id that exists but is not a climate sensor, returns 400. Composes with
         `rooms` and `floors` as AND.
+
+        An `appliance_probe` IS a climate sensor here and is accepted — but it is
+        never combined into a group, so naming one alongside `group_by=room` or
+        `group_by=floor` contributes nothing to the result. Chart it with
+        `group_by=device`.
       schema:
         type: string
     Rooms:
@@ -510,6 +521,14 @@ components:
         always climate sensors only, so a non-climate device sharing a room is
         never included; a room with no climate sensor returns 400. Composes with
         `devices` and `floors` as AND.
+
+        Validation here asks whether a room holds a CHARTABLE device, while
+        /rooms lists the rooms that hold an AMBIENT one. The two differ for a
+        room holding only `appliance_probe` devices: `rooms=` accepts it and
+        `group_by=device` charts its probes, but /rooms does not list it and
+        `group_by=room` yields no series for it. The gap is one-directional — the
+        catalog is never wider than the filter — so a picker built from /rooms
+        still cannot produce a 400.
       schema:
         type: string
     Floors:
@@ -523,6 +542,10 @@ components:
         sensor returns 400. A device whose namespace entry declares no floor has
         an unknown floor and is never selected by `floors`. Composes with
         `devices` and `rooms` as AND.
+
+        As with `rooms`, validation asks for a CHARTABLE device while /floors
+        lists floors holding an AMBIENT one, so a floor declared only by
+        `appliance_probe` devices is accepted here but absent from /floors.
       schema:
         type: string
     Shape:
