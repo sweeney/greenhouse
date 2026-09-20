@@ -115,9 +115,39 @@ environmental telemetry:
   smoke state. They are included because some rooms hold **no
   `environmental_sensor` at all**, so without them those rooms have no climate
   coverage despite live data in Influx.
+- `appliance_probe` — temperature probes potted in thermal ballast **inside** a
+  fridge, a freezer or a wine cooler, so they track contents temperature rather
+  than air and a door opening does not read as a spike.
 
 `class` is reported as-is on `/devices`, so a consumer can tell a purpose-built
-sensor from an alarm and weight them differently if it wants to.
+sensor from an alarm or a probe and weight them differently if it wants to.
+
+#### Charted is not the same as ambient
+
+`appliance_probe` is charted, but its reading describes an **appliance
+interior**, not the air in a room — and the probe's room is necessarily the
+appliance's room. So greenhouse asks two questions, not one:
+
+| Question | Predicate | Used by |
+|---|---|---|
+| May this be **charted**? | `ReportsEnvironment()` | `/devices`, `devices=`, `/devices/{id}/*`, `group_by=device` |
+| May its reading be **combined** with its neighbours'? | `DescribesAmbient()` | `group_by=room`, `group_by=floor`, `/rooms`, `/floors` |
+
+`ambientClasses` is a strict subset of `climateClasses`, and today the gap is
+exactly `appliance_probe`. A probe is therefore charted by `group_by=device`
+and **excluded from every room and floor statistic**: averaging a −19 °C freezer
+probe into its kitchen would report an ambient temperature no thermometer in
+that room would show. statehouse's `ClassApplianceProbe` comment names this as
+the reason the class exists at all.
+
+Two consequences worth stating plainly:
+
+- `device_count` on `/rooms` and `/floors` counts **ambient members only**, so
+  it can be lower than the number of charted devices there.
+- A room or floor holding **only** probes is absent from `/rooms` and `/floors`,
+  because grouping it would produce nothing. `rooms=`/`floors=` still accept it
+  (it holds a charted device), so the catalogs are narrower than the filters in
+  that one case — a picker built from them can still never 400.
 
 This is a **class allowlist**, which asserts that every device of these classes
 reports environment telemetry. That holds for the current fleet, but a future
@@ -125,7 +155,9 @@ fire alarm model that does not report temperature would still be listed and
 would return a well-formed, permanently empty series; correcting that means
 editing `climateClasses` in `internal/config/device.go` and redeploying. The
 alternative — selecting on a non-empty `environment_fields` — would push the
-decision entirely into config; see that file's comment for the trade-off.
+decision entirely into config; see that file's comment for the trade-off. Note
+it would replace `climateClasses` only: whether a reading describes the room's
+air is not a fact `environment_fields` carries.
 
 ### The `environment_fields` hint
 

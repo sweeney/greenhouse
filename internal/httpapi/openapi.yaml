@@ -74,10 +74,19 @@ paths:
         device_environment measurement.
 
         A device is charted when its class reports environmental telemetry:
-        `environmental_sensor` (purpose-built sensors) or `fire_alarm` (the
+        `environmental_sensor` (purpose-built sensors), `fire_alarm` (the
         installed alarms report temperature_c alongside smoke state, and in some
-        rooms they are the ONLY environment source). The `class` is reported
-        as-is so a consumer can distinguish the two.
+        rooms they are the ONLY environment source) or `appliance_probe`
+        (temperature probes potted inside a fridge, freezer or wine cooler). The
+        `class` is reported as-is so a consumer can distinguish them.
+
+        `appliance_probe` is charted but is NOT ambient: its reading describes an
+        appliance interior, not the air in the room, and the probe's room is
+        necessarily the appliance's room. Such a device is therefore EXCLUDED
+        from `group_by=room`, `group_by=floor`, /rooms and /floors, and is
+        charted with `group_by=device`. Averaging a -19 °C freezer probe into its
+        kitchen would report an ambient temperature no thermometer in that room
+        would show. Read `class` to label the two kinds apart.
 
         The hint comes from the device config's explicit `environment_fields`
         list when present; otherwise it falls back to the full field registry,
@@ -102,7 +111,8 @@ paths:
       description: >
         Multi-series climate time-series over the window for one field: per-series
         values aligned to a shared bucket axis. group_by selects device (default,
-        one series per climate sensor) or room (the MEAN of a room's sensors —
+        one series per climate sensor, INCLUDING appliance probes) or room (the
+        MEAN of a room's ambient sensors, probes excluded —
         never a sum). field selects the measurement (default temperature_c); fn
         selects the per-bucket aggregation (mean default, min, max, last). The
         shape param chooses columnar (default) or row-oriented output. Empty
@@ -227,10 +237,13 @@ paths:
         discoverable vocabulary behind the `floors=` filter and `group_by=floor`,
         the same relationship /fields has to `field=`.
 
-        WHICH floors appear is exactly the set `floors=` accepts: a floor no
-        climate device declares is not listed, because /series would reject it —
-        a picker built from this endpoint is therefore never able to produce a
-        400. A floor that devices declare but the floorplan has no record for IS
+        WHICH floors appear is the set `group_by=floor` produces a series for:
+        a floor is listed when at least one AMBIENT device declares it, so a
+        picker built from this endpoint can never select a floor whose grouped
+        series would be empty, nor produce a 400. A floor declared only by
+        `appliance_probe` devices is therefore absent even though `floors=`
+        would accept it — the gap is one-directional and deliberate, since
+        those probes are charted with `group_by=device`. A floor that devices declare but the floorplan has no record for IS
         listed, with `name` empty and `order`/`elevation` null.
 
         `name` and `order` are nullable rather than defaulted because greenhouse
@@ -263,9 +276,11 @@ paths:
         discoverable vocabulary behind the `rooms=` filter — the room-shaped
         sibling of /floors.
 
-        WHICH rooms appear follows /floors exactly: the set `rooms=` accepts, so
-        a picker built from this endpoint can never produce a 400. A room no
-        climate device sits in is not listed; a room devices declare that the
+        WHICH rooms appear follows /floors exactly: the rooms `group_by=room`
+        produces a series for, so a picker built from this endpoint can never
+        produce a 400 or select an empty group. A room no ambient device sits in
+        is not listed — including a room holding only `appliance_probe` devices,
+        which have no ambient reading to combine; a room devices declare that the
         floorplan has no record for IS listed, with `name`, `floor` and
         `category` empty and `area` null.
 
@@ -842,7 +857,10 @@ components:
 
     DeviceCatalogEntry:
       type: object
-      description: One climate device catalog row (environmental_sensor or fire_alarm).
+      description: >
+        One climate device catalog row (environmental_sensor, fire_alarm or
+        appliance_probe). Read `class` to tell an ambient sensor from an
+        appliance probe: only the former is combined by group_by=room/floor.
       properties:
         id:
           type: string
@@ -901,8 +919,10 @@ components:
         device_count:
           type: integer
           description: >
-            How many climate devices declare this floor. Always at least 1, since
-            a floor with none is not listed.
+            How many AMBIENT devices declare this floor — the members
+            `group_by=floor` would combine. Always at least 1, since a floor with
+            none is not listed. Appliance probes are excluded, so this can be
+            lower than the number of charted devices on the floor.
       required: [id, name, order, elevation, device_count]
 
     RoomCatalogEntry:
@@ -951,8 +971,10 @@ components:
         device_count:
           type: integer
           description: >
-            How many climate devices sit in this room. Always at least 1, since a
-            room with none is not listed.
+            How many AMBIENT devices sit in this room — the members
+            `group_by=room` would combine. Always at least 1, since a room with
+            none is not listed. Appliance probes are excluded, so this can be
+            lower than the number of charted devices in the room.
       required: [id, name, floor, category, area, device_count]
 
     RoomsResponse:

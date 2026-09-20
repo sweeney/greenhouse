@@ -763,7 +763,12 @@ func countDevicesByGroupKey(devices map[string]config.DeviceConfig, groupBy stri
 	keyOf := climate.GroupKeyFor(groupBy)
 	counts := map[string]int{}
 	for _, dev := range devices {
-		if !dev.ReportsEnvironment() {
+		// Ambient, matching climate.assembleByGroup exactly: these catalogs
+		// describe the group_by=room / group_by=floor vocabulary, so a room or
+		// floor must be listed when and only when grouping would produce a
+		// series for it. Counting an appliance probe here would advertise a room
+		// whose grouped series is empty.
+		if !dev.DescribesAmbient() {
 			continue
 		}
 		if k := keyOf(dev); k != "" {

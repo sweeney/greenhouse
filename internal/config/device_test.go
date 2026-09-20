@@ -208,3 +208,65 @@ func TestDeviceConfig_FloorWithoutRoom(t *testing.T) {
 		t.Errorf("Place() = %q, want empty: no room and no location", d.Place())
 	}
 }
+
+// --- the two class predicates ---
+//
+// ReportsEnvironment answers "may greenhouse chart this device"; DescribesAmbient
+// answers the narrower "may its reading be combined with its neighbours'". They
+// differ on exactly one class today, and that difference is the point: an
+// appliance_probe reports temperature_c from inside a fridge or a freezer.
+
+func TestReportsEnvironment_ChartsTheClimateClasses(t *testing.T) {
+	for _, class := range []string{"environmental_sensor", "fire_alarm", "appliance_probe"} {
+		if !(DeviceConfig{Class: class}).ReportsEnvironment() {
+			t.Errorf("%s must be charted by greenhouse", class)
+		}
+	}
+}
+
+func TestReportsEnvironment_ExcludesNonClimateClasses(t *testing.T) {
+	for _, class := range []string{"continuous_power_device", "cycle_power_device", "energy_meter", "ups_sensor", ""} {
+		if (DeviceConfig{Class: class}).ReportsEnvironment() {
+			t.Errorf("%s writes no environmental telemetry and must not be charted", class)
+		}
+	}
+}
+
+// The split itself: a probe is charted, but never averaged into a room.
+func TestApplianceProbeIsChartedButNotAmbient(t *testing.T) {
+	d := DeviceConfig{Class: "appliance_probe"}
+	if !d.ReportsEnvironment() {
+		t.Error("an appliance_probe reports temperature_c and must be chartable")
+	}
+	if d.DescribesAmbient() {
+		t.Error("an appliance_probe measures an appliance interior; combining it into a room mean reports an ambient temperature nothing in the room would show")
+	}
+}
+
+func TestDescribesAmbient_TheRoomDescribingClasses(t *testing.T) {
+	for _, class := range []string{"environmental_sensor", "fire_alarm"} {
+		if !(DeviceConfig{Class: class}).DescribesAmbient() {
+			t.Errorf("%s measures room air and must contribute to a room or floor statistic", class)
+		}
+	}
+}
+
+// ambientClasses is documented as a SUBSET of climateClasses: a class that is
+// not charted at all cannot meaningfully be combined, so listing one here would
+// be a contradiction rather than a widening.
+func TestAmbientClassesIsASubsetOfClimateClasses(t *testing.T) {
+	for class := range ambientClasses {
+		if _, ok := climateClasses[class]; !ok {
+			t.Errorf("%s is ambient but not charted — ambientClasses must stay a subset of climateClasses", class)
+		}
+	}
+}
+
+// A device that is never charted is never ambient either, whatever its room.
+func TestDescribesAmbient_ExcludesNonClimateClasses(t *testing.T) {
+	for _, class := range []string{"continuous_power_device", "energy_meter", ""} {
+		if (DeviceConfig{Class: class}).DescribesAmbient() {
+			t.Errorf("%s must not contribute to a room or floor statistic", class)
+		}
+	}
+}
