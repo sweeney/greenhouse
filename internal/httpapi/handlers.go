@@ -356,13 +356,25 @@ type catalogEntry struct {
 	// this device actually writes to `device_environment`. Named to match, so
 	// the catalog and the namespace describe the same thing with one word.
 	EnvironmentFields []string `json:"environment_fields"`
+
+	// TargetTemperature is the °C the device is meant to be holding, as the
+	// namespace declares it, or null where it declares none.
+	//
+	// It is NOT omitempty: an absent key and a declared 0 °C must be
+	// distinguishable, and a consumer reading `null` learns "no target is
+	// published" rather than having to infer it from a missing field. Relayed
+	// raw — greenhouse publishes no tolerance, no in-range flag and no breach
+	// count, because how far off target matters is the consumer's policy.
+	TargetTemperature *float64 `json:"target_temperature"`
 }
 
 // handleDevices serves GET /devices: the climate device catalog. It returns
 // every device whose class reports environmental telemetry (see
-// config.ReportsEnvironment — environmental_sensor and fire_alarm), each with
-// its room, its declared floor, and an `environment_fields` hint of the fields
-// it writes.
+// config.ReportsEnvironment — environmental_sensor, fire_alarm and
+// appliance_probe), each with its room, its declared floor, an
+// `environment_fields` hint of the fields it writes, and the
+// `target_temperature` the namespace declares for it (null when it declares
+// none).
 //
 // The hint comes from the device config's explicit environment_fields list when
 // present; otherwise it falls back to the full field registry. The fallback
@@ -395,6 +407,7 @@ func (s *Server) handleDevices(w http.ResponseWriter, _ *http.Request) {
 			Floor:             dev.Floor,
 			Class:             dev.Class,
 			EnvironmentFields: fields,
+			TargetTemperature: dev.TargetTemperature,
 		})
 	}
 

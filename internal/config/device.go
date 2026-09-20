@@ -68,6 +68,25 @@ type DeviceConfig struct {
 	// round-trips; greenhouse never reads it (it is an energy concern).
 	EnergyStrategy string `yaml:"energy_strategy" json:"energy_strategy,omitempty"`
 
+	// TargetTemperature is the temperature this device is meant to be holding,
+	// in °C, as the namespace declares it — the setpoint of a fridge, a freezer
+	// or a wine cooler, beside the appliance_probe that measures whether it is
+	// actually being held.
+	//
+	// It is a POINTER because 0 °C is a real target and an absent key is not a
+	// target of zero. Absent means the namespace declares none, which greenhouse
+	// reports as UNKNOWN (null) rather than inventing one from the class or the
+	// display name — the same rule Floor follows.
+	//
+	// greenhouse relays the number and nothing more. It does not turn it into a
+	// tolerance band, an in-range flag or a breach count: how far from target is
+	// acceptable, and in which direction, is a per-client policy question, not a
+	// fact about the device — a freezer above target is a food-safety problem
+	// while a wine cooler a degree either side is a matter of taste. This is the
+	// rule roomEntry.Category already follows by relaying the floorplan's
+	// category raw instead of reducing it to an is_living_space flag.
+	TargetTemperature *float64 `yaml:"target_temperature" json:"target_temperature,omitempty"`
+
 	// EnvironmentFields, when present in the namespace, lists the fields this
 	// device actually writes to the `device_environment` measurement (e.g.
 	// ["humidity_pct","temperature_c"]). Named for that measurement rather

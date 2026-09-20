@@ -70,8 +70,9 @@ paths:
       description: >
         Discovery catalog of climate devices from the configured devices
         namespace, each with its room, its declared `floor`,
-        and an `environment_fields` hint of the fields it writes to the
-        device_environment measurement.
+        an `environment_fields` hint of the fields it writes to the
+        device_environment measurement, and the `target_temperature` the
+        namespace declares for it.
 
         A device is charted when its class reports environmental telemetry:
         `environmental_sensor` (purpose-built sensors), `fire_alarm` (the
@@ -886,7 +887,28 @@ components:
             Fields this device writes to device_environment, from the config key
             of the same name. Falls back to the full field registry when config
             does not declare it, in which case it may over-advertise.
-      required: [id, display_name, room, floor, class, environment_fields]
+        target_temperature:
+          type: number
+          nullable: true
+          description: >
+            The temperature in °C this device is meant to be HOLDING, as the
+            devices namespace declares it — the setpoint of a fridge, a freezer
+            or a wine cooler, beside the appliance_probe that measures whether it
+            is actually being held. `null` when the namespace declares none.
+
+            Nullable rather than defaulted, and always present: 0 °C is a real
+            target, so an absent key cannot be reported as zero. A consumer reads
+            null as "no target published" rather than inferring it from a missing
+            field — the same rule /floors follows for `order`.
+
+            Relayed RAW. greenhouse publishes no tolerance, no in-range flag and
+            no breach count, because how far off target matters, and in which
+            direction, is a per-client policy question rather than a fact about
+            the device: a freezer above target is a food-safety problem, while a
+            wine cooler a degree either side is a matter of taste. This is the
+            rule RoomCatalogEntry.category already follows by relaying the
+            floorplan's classification instead of reducing it to a computed flag.
+      required: [id, display_name, room, floor, class, environment_fields, target_temperature]
 
     FloorCatalogEntry:
       type: object

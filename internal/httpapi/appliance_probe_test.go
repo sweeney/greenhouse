@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/sweeney/greenhouse/internal/config"
@@ -136,6 +137,115 @@ func TestFloors_ExcludesAProbeOnlyFloor(t *testing.T) {
 		}
 		if f.ID == "groundfloor" && f.DeviceCount != 1 {
 			t.Errorf("groundfloor device_count = %d, want 1 (probe excluded from the floor combine)", f.DeviceCount)
+		}
+	}
+}
+
+// --- target_temperature ---
+//
+// The namespace declares what an appliance is meant to be holding; greenhouse
+// relays it so a consumer does not have to read config.swee.net itself, or
+// hardcode a setpoint, to know what the probe beside it should be showing.
+
+func f64(v float64) *float64 { return &v }
+
+// targetDevices covers all three cases the field has to tell apart: a declared
+// target, a declared target of ZERO, and no target at all.
+func targetDevices() map[string]config.DeviceConfig {
+	return map[string]config.DeviceConfig{
+		"probe_freezer": {
+			Class: "appliance_probe", Room: "groundfloor.kitchen", Floor: "groundfloor",
+			DisplayName: "Probe: Freezer", EnvironmentFields: []string{"temperature_c"},
+			TargetTemperature: f64(-18),
+		},
+		"probe_chiller": {
+			Class: "appliance_probe", Room: "groundfloor.kitchen", Floor: "groundfloor",
+			DisplayName: "Probe: Chiller", EnvironmentFields: []string{"temperature_c"},
+			TargetTemperature: f64(0), // a real target, not an absent one
+		},
+		"climate_kitchen": {
+			Class: "environmental_sensor", Room: "groundfloor.kitchen", Floor: "groundfloor",
+			DisplayName: "Climate: Kitchen", EnvironmentFields: []string{"temperature_c"},
+			// no target declared
+		},
+	}
+}
+
+// catalogTargets decodes /devices keeping the raw JSON for each entry, so the
+// difference between `null` and an absent key is observable.
+func catalogTargets(t *testing.T, s *Server) map[string]json.RawMessage {
+	t.Helper()
+	w := doGET(t, s, "/devices")
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Devices []map[string]json.RawMessage `json:"devices"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode %s: %v", w.Body.String(), err)
+	}
+	out := map[string]json.RawMessage{}
+	for _, d := range resp.Devices {
+		var id string
+		_ = json.Unmarshal(d["id"], &id)
+		out[id] = d["target_temperature"]
+	}
+	return out
+}
+
+func TestDevices_RelaysDeclaredTargetTemperature(t *testing.T) {
+	s, _ := dataSetup(t)
+	s.Config = fakeConfig{devices: targetDevices()}
+	got := catalogTargets(t, s)
+
+	if string(got["probe_freezer"]) != "-18" {
+		t.Errorf("freezer target = %s, want -18 relayed from the namespace", got["probe_freezer"])
+	}
+}
+
+// The reason the field is a pointer. A freezer chiller held at 0 °C has a real
+// target; serialised as a bare float it would be indistinguishable from one with
+// no target at all, and a consumer would draw a 0 °C line for every device.
+func TestDevices_ZeroTargetIsNotAbsent(t *testing.T) {
+	s, _ := dataSetup(t)
+	s.Config = fakeConfig{devices: targetDevices()}
+	got := catalogTargets(t, s)
+
+	if string(got["probe_chiller"]) != "0" {
+		t.Errorf("chiller target = %s, want 0 — an explicit 0 °C target must survive", got["probe_chiller"])
+	}
+	if string(got["climate_kitchen"]) != "null" {
+		t.Errorf("kitchen target = %s, want null — no declared target", got["climate_kitchen"])
+	}
+}
+
+// The key is always present, so a consumer can read "no target published" from
+// null rather than having to distinguish a missing field from a parse failure.
+func TestDevices_TargetKeyAlwaysPresent(t *testing.T) {
+	s, _ := dataSetup(t)
+	s.Config = fakeConfig{devices: targetDevices()}
+	got := catalogTargets(t, s)
+
+	for _, id := range []string{"probe_freezer", "probe_chiller", "climate_kitchen"} {
+		if _, ok := got[id]; !ok || len(got[id]) == 0 {
+			t.Errorf("%s has no target_temperature key at all; it must be present and null when undeclared", id)
+		}
+	}
+}
+
+// greenhouse relays the number and draws no conclusion from it: no in-range
+// flag, no tolerance, no breach count. Whether 6.8 °C against a target of 5 is a
+// problem is the consumer's policy, exactly as a room's category is.
+func TestDevices_TargetCarriesNoVerdict(t *testing.T) {
+	s, _ := dataSetup(t)
+	s.Config = fakeConfig{devices: targetDevices()}
+	w := doGET(t, s, "/devices")
+	body := w.Body.String()
+
+	for _, banned := range []string{"in_range", "on_target", "within_target", "target_band", "tolerance", "breach"} {
+		if strings.Contains(body, banned) {
+			t.Errorf("catalog exposes %q — greenhouse relays the target, it does not judge against it", banned)
 		}
 	}
 }

@@ -159,6 +159,25 @@ decision entirely into config; see that file's comment for the trade-off. Note
 it would replace `climateClasses` only: whether a reading describes the room's
 air is not a fact `environment_fields` carries.
 
+### The `target_temperature` relay
+
+An `appliance_probe` measures whether an appliance is holding its temperature,
+which is only a question if you know what it is *meant* to be holding. The
+devices namespace declares that as `target_temperature` (°C) and `/devices`
+relays it, so a consumer needs neither a hardcoded setpoint nor its own call to
+the config service.
+
+It is **nullable and always present**: `null` means the namespace declares no
+target, and that is deliberately distinct from `0`, which is a real target for a
+chiller. Absent keys are never reported as zero.
+
+greenhouse relays the **number and nothing else** — no tolerance, no in-range
+flag, no breach count. How far off target matters, and in which direction, is a
+per-client policy question rather than a fact about the device: a freezer above
+target is a food-safety problem, a wine cooler a degree either side is a matter
+of taste. This is the same rule `/rooms` follows by relaying `category` raw
+instead of reducing it to an `is_living_space` flag.
+
 ### The `environment_fields` hint
 
 `environment_fields` on `/devices` comes from the device config key of the same
