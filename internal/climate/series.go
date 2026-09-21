@@ -412,7 +412,11 @@ func CircularGroupConflict(field, groupBy string, devices map[string]config.Devi
 	}
 	counts := map[string]int{}
 	for _, d := range devices {
-		if !d.ReportsEnvironment() {
+		// Ambient, not merely charted: this counts the members a group would
+		// COMBINE, and an appliance probe is never combined (DescribesAmbient).
+		// Counting one would 400 a request that group_by is about to answer
+		// with a single bearing passed through untouched.
+		if !d.DescribesAmbient() {
 			continue
 		}
 		if k := keyOf(d); k != "" {
@@ -464,7 +468,13 @@ func assembleByGroup(
 	}
 	members := map[string][]string{}
 	for id, d := range devices {
-		if !d.ReportsEnvironment() {
+		// The combine is a SPATIAL statistic about a room or a floor, so its
+		// members are the devices that describe that space (DescribesAmbient),
+		// not every device greenhouse charts. An appliance_probe is charted but
+		// reports an appliance interior, so averaging it in would move a room's
+		// mean toward a freezer's setpoint — see config.ambientClasses. Probes
+		// are reached by group_by=device.
+		if !d.DescribesAmbient() {
 			continue
 		}
 		place := keyOf(d)

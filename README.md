@@ -34,7 +34,7 @@ requires a Bearer JWT (user **or** service token).
 |---|---|
 | `GET /healthz` | status, version, uptime, influx_reachable, resolved site (incl. namespaces), remote_config status |
 | `GET /openapi.json` | the OpenAPI spec as JSON |
-| `GET /devices` | climate device catalog: id, display_name, room, floor, class, and an `environment_fields` hint |
+| `GET /devices` | climate device catalog: id, display_name, room, floor, class, an `environment_fields` hint, and the declared `target_temperature` (null when none) |
 | `GET /floors` | floor catalog: id, name, order, elevation, device_count — the vocabulary `floors=` accepts |
 | `GET /rooms` | room catalog: id, name, floor, category, area, device_count — the vocabulary `rooms=` accepts |
 | `GET /devices/{id}/series` | single-device, single-field time-series |
@@ -80,9 +80,14 @@ requires a Bearer JWT (user **or** service token).
   declaring no room (for `room`) or no floor (for `floor`) has UNKNOWN membership
   and is **omitted** rather than keyed on `""`; `group_by=device` charts it. A
   **circular** field cannot be combined across a group's members at all, so
-  grouping one by a key whose group holds two or more climate sensors → 400.
+  grouping one by a key whose group holds two or more **ambient** sensors → 400.
+  An `appliance_probe` is charted but never a group member (see *Charted is not
+  the same as ambient*), so it is not counted here and a group holding one
+  ambient sensor beside a probe still passes.
 - `group_fn` — how a group's **members** are combined: `mean` (default) \| `min`
-  \| `max`. Applied *after* `fn` (see below). `last` → 400 (not a spatial
+  \| `max`. A group's members are its **ambient** devices only — a probe is
+  charted but never combined — and a group left with no ambient member yields no
+  series. Applied *after* `fn` (see below). `last` → 400 (not a spatial
   statistic); `sum` → 400 (non-additive); supplying it with `group_by=device` →
   400, because that grouping combines nothing. `/devices/{id}/series` rejects it
   for the same reason — it always groups by device. (`group_by` itself and the
@@ -91,16 +96,25 @@ requires a Bearer JWT (user **or** service token).
 - `devices` — (`/series` only) CSV of device ids to chart, e.g.
   `devices=sensor_b,sensor_c`. Restricts the series to those
   sensors (omit for all climate devices). An unknown or non-climate id → 400.
+  An `appliance_probe` **is** accepted here, but it is never combined into a
+  group, so naming one alongside `group_by=room`/`group_by=floor` contributes
+  nothing — chart it with `group_by=device`.
   Composes with `rooms` and `floors` as AND.
 - `rooms` — (`/series` only) CSV of floorplan room ids to chart, e.g.
   `rooms=floor2.room-a,floor3.room-a`. The candidate set is always
   climate sensors only, so a non-climate device sharing a room is never included,
-  and a room with no climate sensor → 400. Composes with `devices` and `floors` as AND.
+  and a room with no climate sensor → 400. Validation here asks whether a room
+  holds a **chartable** device while `/rooms` lists rooms holding an **ambient**
+  one, so a probe-only room is accepted by `rooms=` yet absent from the catalog
+  and empty under `group_by=room`. One-directional, so a picker built from
+  `/rooms` still cannot 400. Composes with `devices` and `floors` as AND.
 - `floors` — (`/series` only) CSV of floors to chart, e.g.
   `floors=floor1,floor2`. The coarse sibling of `rooms`: it selects every
   climate sensor whose declared floor matches, so a caller does not have to enumerate
   the floorplan. A floor with no climate sensor → 400, and a device whose entry
-  declares no floor is never selected. Composes with `devices` and `rooms` as AND.
+  declares no floor is never selected. Same chartable-vs-ambient asymmetry as
+  `rooms=`: a floor declared only by probes is accepted here but absent from
+  `/floors`. Composes with `devices` and `rooms` as AND.
 - `shape` — `columns` (default, shared buckets axis + per-series arrays) \|
   `rows` (flat one-row-per-(series,bucket)). Both carry `field`/`unit`/`fn`.
 
@@ -115,9 +129,39 @@ environmental telemetry:
   smoke state. They are included because some rooms hold **no
   `environmental_sensor` at all**, so without them those rooms have no climate
   coverage despite live data in Influx.
+- `appliance_probe` — temperature probes potted in thermal ballast **inside** a
+  fridge, a freezer or a wine cooler, so they track contents temperature rather
+  than air and a door opening does not read as a spike.
 
 `class` is reported as-is on `/devices`, so a consumer can tell a purpose-built
-sensor from an alarm and weight them differently if it wants to.
+sensor from an alarm or a probe and weight them differently if it wants to.
+
+#### Charted is not the same as ambient
+
+`appliance_probe` is charted, but its reading describes an **appliance
+interior**, not the air in a room — and the probe's room is necessarily the
+appliance's room. So greenhouse asks two questions, not one:
+
+| Question | Predicate | Used by |
+|---|---|---|
+| May this be **charted**? | `ReportsEnvironment()` | `/devices`, `devices=`, `/devices/{id}/*`, `group_by=device` |
+| May its reading be **combined** with its neighbours'? | `DescribesAmbient()` | `group_by=room`, `group_by=floor`, `/rooms`, `/floors` |
+
+`ambientClasses` is a strict subset of `climateClasses`, and today the gap is
+exactly `appliance_probe`. A probe is therefore charted by `group_by=device`
+and **excluded from every room and floor statistic**: averaging a −19 °C freezer
+probe into its kitchen would report an ambient temperature no thermometer in
+that room would show. statehouse's `ClassApplianceProbe` comment names this as
+the reason the class exists at all.
+
+Two consequences worth stating plainly:
+
+- `device_count` on `/rooms` and `/floors` counts **ambient members only**, so
+  it can be lower than the number of charted devices there.
+- A room or floor holding **only** probes is absent from `/rooms` and `/floors`,
+  because grouping it would produce nothing. `rooms=`/`floors=` still accept it
+  (it holds a charted device), so the catalogs are narrower than the filters in
+  that one case — a picker built from them can still never 400.
 
 This is a **class allowlist**, which asserts that every device of these classes
 reports environment telemetry. That holds for the current fleet, but a future
@@ -125,7 +169,28 @@ fire alarm model that does not report temperature would still be listed and
 would return a well-formed, permanently empty series; correcting that means
 editing `climateClasses` in `internal/config/device.go` and redeploying. The
 alternative — selecting on a non-empty `environment_fields` — would push the
-decision entirely into config; see that file's comment for the trade-off.
+decision entirely into config; see that file's comment for the trade-off. Note
+it would replace `climateClasses` only: whether a reading describes the room's
+air is not a fact `environment_fields` carries.
+
+### The `target_temperature` relay
+
+An `appliance_probe` measures whether an appliance is holding its temperature,
+which is only a question if you know what it is *meant* to be holding. The
+devices namespace declares that as `target_temperature` (°C) and `/devices`
+relays it, so a consumer needs neither a hardcoded setpoint nor its own call to
+the config service.
+
+It is **nullable and always present**: `null` means the namespace declares no
+target, and that is deliberately distinct from `0`, which is a real target for a
+chiller. Absent keys are never reported as zero.
+
+greenhouse relays the **number and nothing else** — no tolerance, no in-range
+flag, no breach count. How far off target matters, and in which direction, is a
+per-client policy question rather than a fact about the device: a freezer above
+target is a food-safety problem, a wine cooler a degree either side is a matter
+of taste. This is the same rule `/rooms` follows by relaying `category` raw
+instead of reducing it to an `is_living_space` flag.
 
 ### The `environment_fields` hint
 
@@ -228,7 +293,7 @@ advertise a vocabulary `/series` itself refuses. Chart such a device with
 combine** applies exactly that arithmetic when a group holds more than one
 sensor, so it is refused on the same grounds:
 
-- Grouping a circular field where any group holds 2+ climate sensors → **400**,
+- Grouping a circular field where any group holds 2+ **ambient** sensors → **400**,
   naming the field, the group and the way out. Said up front rather than served
   as gaps: `null` means "no reading", so a silently-gapped series would be
   indistinguishable from a sensor outage.
@@ -300,8 +365,11 @@ wants it, and an equipment view wants only it. A boolean would bake the first ca
 answer into the API and leave the other two working around it. The floorplan owns the
 taxonomy, greenhouse relays it, clients interpret it.
 
-Which rooms are listed follows `/floors` exactly: the rooms at least one climate device
-sits in, which is the set `rooms=` accepts, so a picker built from it cannot 400. Room
+Which rooms are listed follows `/floors` exactly: the rooms at least one **ambient**
+device sits in — the rooms `group_by=room` produces a series for — so a picker built
+from it can neither 400 nor select an empty group. That is narrower than the set
+`rooms=` accepts, which asks only for a chartable device; the difference is a room
+holding nothing but `appliance_probe`s. Room
 `name`s are **not unique** — two rooms on different floors may share one — so `id` is the
 key, and a client wanting an unambiguous label joins `/rooms` to `/floors` on the room's
 `floor`.
@@ -339,7 +407,7 @@ that can still tell "unnamed" apart from "named and empty".
 
 `floorplan_namespace` is **optional**, and deliberately so. Greenhouse charts devices; a
 room or floor's label, storey order and category are presentation detail. Unset, `/floors`
-and `/rooms` still list everything that holds a climate sensor — with `name`, `order` and
+and `/rooms` still list everything that holds an ambient sensor — with `name`, `order` and
 `category` reported as unknown, and grouped series still labelled by id — and a fetch
 failure is fail-open and never touches the devices snapshot. A missing floorplan can
 degrade the labels; it can never stop a climate service serving climate.

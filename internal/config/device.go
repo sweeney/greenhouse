@@ -68,6 +68,25 @@ type DeviceConfig struct {
 	// round-trips; greenhouse never reads it (it is an energy concern).
 	EnergyStrategy string `yaml:"energy_strategy" json:"energy_strategy,omitempty"`
 
+	// TargetTemperature is the temperature this device is meant to be holding,
+	// in °C, as the namespace declares it — the setpoint of a fridge, a freezer
+	// or a wine cooler, beside the appliance_probe that measures whether it is
+	// actually being held.
+	//
+	// It is a POINTER because 0 °C is a real target and an absent key is not a
+	// target of zero. Absent means the namespace declares none, which greenhouse
+	// reports as UNKNOWN (null) rather than inventing one from the class or the
+	// display name — the same rule Floor follows.
+	//
+	// greenhouse relays the number and nothing more. It does not turn it into a
+	// tolerance band, an in-range flag or a breach count: how far from target is
+	// acceptable, and in which direction, is a per-client policy question, not a
+	// fact about the device — a freezer above target is a food-safety problem
+	// while a wine cooler a degree either side is a matter of taste. This is the
+	// rule roomEntry.Category already follows by relaying the floorplan's
+	// category raw instead of reducing it to an is_living_space flag.
+	TargetTemperature *float64 `yaml:"target_temperature" json:"target_temperature,omitempty"`
+
 	// EnvironmentFields, when present in the namespace, lists the fields this
 	// device actually writes to the `device_environment` measurement (e.g.
 	// ["humidity_pct","temperature_c"]). Named for that measurement rather
@@ -86,12 +105,16 @@ type DeviceConfig struct {
 
 // climateClasses are the statehouse device classes whose members write
 // environmental telemetry to the `device_environment` measurement, and which
-// greenhouse therefore charts.
+// greenhouse therefore CHARTS.
 //
 // `fire_alarm` is here because the three installed alarms each write
 // temperature_c alongside their smoke state — and crucially, some rooms
 // hold NO environmental_sensor at all, so without them those two rooms have no
 // climate coverage despite live data sitting in Influx.
+//
+// `appliance_probe` is here because the probes write temperature_c exactly as
+// the TH sensors do — but what they describe is an appliance interior, not the
+// air in the room, so it is NOT in ambientClasses below. See that map.
 //
 // KNOWN LIMITATION — this is a deliberate, documented trade-off:
 //
@@ -115,6 +138,39 @@ type DeviceConfig struct {
 // climate and httpapi packages agree by construction rather than by two
 // consts that can drift apart.
 var climateClasses = map[string]struct{}{
+	"environmental_sensor": {},
+	"fire_alarm":           {},
+	"appliance_probe":      {},
+}
+
+// ambientClasses are the climate classes whose readings describe the AIR IN THE
+// ROOM, and which may therefore be combined into a room or floor statistic.
+//
+// It is a subset of climateClasses, and the gap between the two is the whole
+// point. An `appliance_probe` is a temperature probe potted in thermal ballast
+// INSIDE a fridge, a freezer or a wine cooler: it reports temperature_c like any
+// TH sensor, so greenhouse charts it, but it measures an appliance interior. The
+// probe's room is necessarily the appliance's room, so a naive group_by=room
+// over every climate device averages a -19 °C freezer interior into the kitchen
+// and reports an ambient temperature no thermometer in that room would show.
+// statehouse's own class comment (device/profiles.go, ClassApplianceProbe) names
+// this as the reason the class exists: "Consumers aggregating ambient conditions
+// by room need to exclude these."
+//
+// So the two predicates split the question that used to be one:
+//
+//	ReportsEnvironment() — may this device be charted at all?  (catalog,
+//	                       devices=, /devices/{id}/*, group_by=device)
+//	DescribesAmbient()   — may its reading be COMBINED with its neighbours'?
+//	                       (group_by=room, group_by=floor, /rooms, /floors)
+//
+// This is NOT a per-package class const of the kind the allowlist replaced —
+// both maps live here and are reached only through the two methods below, so
+// the climate and httpapi packages still agree by construction.
+//
+// A class absent from climateClasses is not charted at all, so listing it here
+// would say nothing; keep this map a subset.
+var ambientClasses = map[string]struct{}{
 	"environmental_sensor": {},
 	"fire_alarm":           {},
 }
@@ -146,10 +202,32 @@ const CoverageHouse = "house"
 
 // ReportsEnvironment reports whether greenhouse charts this device — i.e.
 // whether its class writes to the `device_environment` measurement. It is the
-// single predicate behind the device catalog, the series device set, and the
-// devices=/rooms=/floors= filters.
+// predicate behind the device catalog, the series device set, the
+// devices=/rooms=/floors= filters and group_by=device.
+//
+// It answers "may this be charted", NOT "may this be averaged with its
+// neighbours" — see DescribesAmbient, which is the narrower question.
 func (d DeviceConfig) ReportsEnvironment() bool {
 	_, ok := climateClasses[d.Class]
+	return ok
+}
+
+// DescribesAmbient reports whether this device's readings describe the air in
+// the room it sits in, and may therefore be COMBINED into a room or floor
+// statistic. It is the predicate behind group_by=room, group_by=floor and the
+// /rooms and /floors catalogs.
+//
+// Every ambient device is also a charted one (ambientClasses is a subset of
+// climateClasses), so callers never need both: use this one wherever two
+// devices' readings are about to be averaged, and ReportsEnvironment
+// everywhere else.
+//
+// The class it excludes is `appliance_probe`, whose readings are of an
+// appliance interior rather than a room — averaging a freezer probe into its
+// kitchen reports an ambient temperature nothing in that room would measure.
+// See ambientClasses for the full reasoning.
+func (d DeviceConfig) DescribesAmbient() bool {
+	_, ok := ambientClasses[d.Class]
 	return ok
 }
 

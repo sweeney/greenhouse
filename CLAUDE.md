@@ -24,13 +24,36 @@ shapes, the Influx Querier + fake, the Server/auth/CORS/spec skeleton, the confi
   canonical bucket axis. This bit it in countinghouse — don't reintroduce it. See PLAN §3.
 - **No energy concepts.** No cost, tariff, bill, counter/integral, or on/off events. Those belong to
   countinghouse. Climate fields are plain gauge readings.
-- **Device selection is a class allowlist**, in ONE place: `climateClasses` +
-  `DeviceConfig.ReportsEnvironment()` in `internal/config/device.go`. Currently `environmental_sensor`
-  and `fire_alarm` (the alarms report `temperature_c`, and some rooms have no other sensor).
-  Never re-introduce a per-package class const — that duplication is what this replaced. Known
-  limitation, documented at the map: class asserts "every device of this class reports environment
-  telemetry", so a future non-reporting model would yield an empty series until someone edits and
-  deploys. The alternative (select on `environment_fields`) is a one-predicate change.
+- **Device selection is a class allowlist**, in ONE place: `internal/config/device.go`. Never
+  re-introduce a per-package class const — that duplication is what this replaced. There are
+  **two** allowlists there, reached only through two methods, and picking the wrong one is how a
+  freezer ends up in a room average:
+  - `climateClasses` + `ReportsEnvironment()` — **may this be charted at all?** Currently
+    `environmental_sensor`, `fire_alarm` (the alarms report `temperature_c`, and some rooms have
+    no other sensor) and `appliance_probe`. Use it for the catalog, `devices=`,
+    `/devices/{id}/*` and `group_by=device`.
+  - `ambientClasses` + `DescribesAmbient()` — **may its reading be COMBINED with its
+    neighbours'?** A strict subset: `environmental_sensor` and `fire_alarm`. Use it wherever two
+    devices' readings are about to be averaged — `group_by=room`, `group_by=floor`, and the
+    `/rooms` and `/floors` catalogs that advertise that vocabulary.
+
+  An `appliance_probe` is a probe potted inside a fridge, a freezer or a wine cooler. It writes
+  `temperature_c` like any TH sensor, so greenhouse charts it — but it measures an appliance
+  interior, and its room is necessarily the appliance's room, so combining it reports an ambient
+  temperature nothing in that room would measure. statehouse's `ClassApplianceProbe` comment names
+  this as the reason the class exists. Known limitation, documented at the map: class asserts
+  "every device of this class reports environment telemetry", so a future non-reporting model
+  would yield an empty series until someone edits and deploys. The alternative (select on
+  `environment_fields`) is a one-predicate change — but it would only replace `climateClasses`;
+  "does this describe the room's air" is not a fact `environment_fields` carries.
+- **Config facts are relayed RAW, never reduced to a verdict.** `target_temperature`
+  (the °C an appliance should be holding, beside its `appliance_probe`) is published by
+  `/devices` as a nullable number and nothing more — no tolerance, no in-range flag, no
+  breach count. How far off target matters, and in which direction, is the consumer's
+  policy, not a fact about the device. Same rule as `/rooms` relaying `category` rather
+  than an `is_living_space` flag. It is a `*float64` because **0 °C is a real target**
+  and an absent key must not serialise as zero; the JSON key is always present so `null`
+  reads as "none published".
 - **Floor is config, not derivation.** The devices namespace declares `floor` as a
   first-class property alongside `room`. `DeviceConfig.Floor` mirrors it and greenhouse
   passes it through; never re-derive a floor from the room id's `<floor>.<slug>` shape.
