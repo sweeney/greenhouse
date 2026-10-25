@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDefault(t *testing.T) {
@@ -217,6 +218,23 @@ func TestLoadAcceptsWholeHourTimezones(t *testing.T) {
 		p := writeFile(t, dir, "config.yaml", "house:\n  timezone: \""+tz+"\"\n")
 		if _, err := Load(p); err != nil {
 			t.Errorf("%s: unexpected error: %v", tz, err)
+		}
+	}
+}
+
+// TestCheckWholeHourZone_FixedZones exercises the check on synthetic zones, so
+// it does not depend on what a tzdata release says about any real place.
+func TestCheckWholeHourZone_FixedZones(t *testing.T) {
+	for _, c := range []struct {
+		off int
+		ok  bool
+	}{
+		{0, true}, {3600, true}, {-5 * 3600, true}, {14 * 3600, true},
+		{5*3600 + 1800, false}, {-(3*3600 + 1800), false}, {5*3600 + 45*60, false}, {-(44*60 + 30), false},
+	} {
+		err := checkWholeHourZone(time.FixedZone("Test", c.off))
+		if (err == nil) != c.ok {
+			t.Errorf("offset %+ds: err = %v, want ok=%v", c.off, err, c.ok)
 		}
 	}
 }

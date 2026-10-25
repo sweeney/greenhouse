@@ -19,10 +19,11 @@ and `statehouse` (real-time state), and mirrors their conventions. See
 - **Left-edge buckets.** Flux `aggregateWindow` is called with
   `timeSrc: "_start"` so values align to the Go-owned canonical bucket axis;
   empty buckets are `null` (no reading), not zero.
-- **Grid-aligned bucket axis.** The canonical axis is snapped onto the interval
-  grid anchored at **local midnight** — the same grid Influx's location-aware
-  `aggregateWindow` uses. So a `6h` axis is 00/06/12/18 local in both GMT and
-  BST, and every Influx bucket stamp exact-matches a Go bucket.
+- **Grid-aligned bucket axis.** The canonical axis is snapped onto the grid each
+  interval's readings are windowed on: the UTC grid at `5m`–`1h` (the local hour
+  grid in a whole-hour zone), local wall clock at `6h` (00/06/12/18 local in both
+  GMT and BST), local midnight at `1d`. Every Influx bucket stamp exact-matches a
+  Go bucket, across a clock change too — see [Clock changes](#clock-changes).
 
 ## HTTP API
 
@@ -61,11 +62,9 @@ requires a Bearer JWT (user **or** service token).
   query range still begins at `from` — and it is what keeps every bucket's value
   describing the span its label claims. `today`/`week`/`month`/`<N>d` start at
   local midnight and are already on every sub-day grid, so they are unchanged.
-  Known caveat: a sub-day interval over a window that *crosses* a DST transition
-  steps by fixed duration and drifts an hour off Flux's stretched local grid
-  after the changeover.
 - `interval` — `5m,15m,30m,1h,6h,1d`; smart default per window, ~2500-bucket cap
-  (admits 5-minute resolution over a 7-day window, ~2016 buckets).
+  (admits 5-minute resolution over a 7-day window, ~2016 buckets). Every interval
+  keeps its own grid across a clock change; see [Clock changes](#clock-changes).
 - `field` — one of `temperature_c, humidity_pct, pressure_hpa, wind_speed_ms,
   wind_dir_deg, rainfall_mm, illuminance_lux, uv_index`. Default `temperature_c`.
   Unknown field → 400.
@@ -117,6 +116,49 @@ requires a Bearer JWT (user **or** service token).
   `/floors`. Composes with `devices` and `rooms` as AND.
 - `shape` — `columns` (default, shared buckets axis + per-series arrays) \|
   `rows` (flat one-row-per-(series,bucket)). Both carry `field`/`unit`/`fn`.
+
+#### Clock changes
+
+Each interval keeps its own grid across a clock change. On the Europe/London
+changeover days (autumn: 02:00 BST → 01:00 GMT; spring: 01:00 GMT → 02:00 BST):
+
+| interval | grid | autumn day (25h) | spring day (23h) |
+|---|---|---|---|
+| `5m` `15m` `30m` `1h` | fixed step on the absolute (UTC) grid | the repeated hour is two sets of buckets, `…01:00+01:00` then `…01:00Z`; 25 hourly buckets | the missing hour has no buckets; 23 hourly buckets |
+| `6h` | local wall clock, `00/06/12/18` local | first bucket `00:00+01:00` is **7h**, then `06:00Z`, `12:00Z`, `18:00Z` | first bucket `00:00Z` is **5h**, then `06:00+01:00`, … |
+| `1d` | local calendar day | one 25h bucket | one 23h bucket |
+
+How the readings are fetched: sub-day intervals are queried from Influx on the
+**UTC grid**, and only `1d` asks Influx for local-time windows. Influx's
+location-aware `aggregateWindow` lays sub-day windows on local wall-clock time and
+stretches the one that straddles the repeated hour. At `15m` the 01:45 BST window
+ran to 02:00 GMT, 75 minutes, so before this was fixed every sensor read `null`
+for the four buckets of the repeated hour and the bucket before them held the
+mean of all 75 minutes ([#36](https://github.com/sweeney/greenhouse/issues/36);
+countinghouse hit the same thing,
+[countinghouse#49](https://github.com/sweeney/countinghouse/issues/49)). `6h` was
+also wrong after either change: its axis stepped a fixed 6h and drifted to
+`05/11/17/23Z`, so every value sat in the bucket before its own.
+
+`6h` is queried at `1h` and folded onto the local axis in Go. Climate is not
+additive, so how an hour folds depends on `fn`, and each fold gives exactly what
+Influx's own aggregate over the whole 6h window would have been:
+
+- `min` / `max` take the min / max of the hourly mins / maxes;
+- `last` takes the latest hour that has a reading;
+- `mean` is **not** a mean of hourly means. Sensors report on change, so one hour
+  can hold 60 readings and the next 3, and averaging hourly means would weight
+  them alike. Greenhouse queries hourly `sum` and `count` instead and divides the
+  totals, which is the sample mean of the 6h window. That costs a second Influx
+  query, and only for `fn=mean&interval=6h`.
+
+`group_fn` still runs after `fn`, across a group's members, on the folded values.
+
+Because sub-day buckets sit on the UTC hour grid, `house.timezone` must be a zone
+whose UTC offset is always a whole number of hours (see [Config](#config)). In a
+zone whose clocks go forward **at** a `6h` or day boundary (e.g. America/Santiago,
+which skips local midnight), the skipped boundary starts at the moment of the
+change and the boundaries after it stay on the local grid.
 
 ### Which devices are charted
 
@@ -443,6 +485,16 @@ is fetched from the remote config service (one devices namespace only — **no**
 and `site.devices_namespace` must name it). Fetches are fail-open
 (log + keep last-known) with SIGHUP reload. Greenhouse needs its own Influx
 **read token** (statehouse bucket) and `client_id`/`secret` in id.swee.net.
+
+**`house.timezone`** is a tz database name. It must be a zone whose UTC offset is
+**always a whole number of hours** (Europe/London, UTC, America/New_York, …). A
+zone like Asia/Kolkata (+05:30), Asia/Kathmandu (+05:45) or Australia/Lord_Howe
+(30-minute DST) is refused at startup. `/series` windows sub-day buckets on the UTC
+hour grid and folds them onto local `6h` boundaries, and in a half-hour zone every
+hourly label would sit at half past and every `6h` boundary would fall mid-bucket.
+Only offsets from 2020 on are checked, so a zone that is whole-hour today but was
+not decades ago (Asia/Singapore, America/Caracas) is accepted. See
+[Clock changes](#clock-changes).
 
 **Secure by default:** inbound auth is disabled only when `identity.base_url` is
 empty (local dev/tests), and that path is loud — a startup warning is logged and

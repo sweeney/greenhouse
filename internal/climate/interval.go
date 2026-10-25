@@ -25,15 +25,50 @@ const MaxBuckets = 2500
 // Interval is one allowed bucketing granularity.
 //
 // Token is the Flux duration literal passed to aggregateWindow(every:) (and to
-// the influx series builder). Duration is the Go-side fixed length used to step
-// the canonical axis. Calendar marks day-and-larger intervals whose real length
-// is NOT a fixed Duration: a London calendar day is 23h or 25h across a DST
-// changeover, so the axis must step by calendar date (time.Date day+1) rather
+// the influx series builder) — except for a wall-clock interval (6h), which is
+// never passed to Influx at its own width; see wallClock. Duration is the
+// nominal length: the fixed step of a ≤1h axis, and the step between INTENDED
+// wall-clock boundaries of a 6h axis. Calendar marks day-and-larger intervals
+// whose real length is NOT a fixed Duration: a London calendar day is 23h or
+// 25h across a DST changeover, so the axis must step by calendar date rather
 // than by adding Duration.
+//
+// The three kinds of interval, and who lays their grid (issue #36):
+//
+//   - ≤1h (5m/15m/30m/1h): Influx windows them on the UTC grid; the axis is the
+//     same absolute grid. 25 hourly buckets on the autumn changeover day.
+//   - wall-clock (6h): Influx windows the readings at 1h on the UTC grid; Go
+//     folds them onto 00/06/12/18 LOCAL, so a changeover day's first bucket is
+//     7h (autumn) or 5h (spring). See BuildSeries for how each fn folds.
+//   - calendar (1d): Influx windows local calendar days itself (location:),
+//     23h/25h across a change; the axis steps calendar dates to match.
 type Interval struct {
 	Token    string
 	Duration time.Duration
 	Calendar bool
+}
+
+// maxDirectInterval is the widest SUB-DAY interval Influx is asked to window
+// itself (issue #36).
+//
+// Sub-day series are queried on the UTC grid, never on local time: Influx's
+// location-aware aggregateWindow lays sub-day windows on local wall clock and
+// stretches the one that straddles the autumn repeated hour (see
+// influx.windowLocation). For a zone whose offset is always a whole number of
+// hours — config refuses any other — the UTC grid at 1h and finer coincides
+// with the local grid, so querying there loses nothing.
+//
+// Wider sub-day intervals do not coincide: a 6h UTC grid is 01/07/13/19 local
+// in BST. Those are WALL-CLOCK intervals: queried at this width and folded in
+// Go onto a local axis that BucketStarts steps by wall-clock hour.
+const maxDirectInterval = time.Hour
+
+// wallClock reports whether iv is a sub-day interval wider than Influx can be
+// asked to window directly (6h): its axis steps LOCAL wall-clock hours, so a
+// bucket that straddles a clock change is an hour longer or shorter, and its
+// readings are queried at maxDirectInterval and folded onto that axis.
+func (iv Interval) wallClock() bool {
+	return !iv.Calendar && iv.Duration > maxDirectInterval
 }
 
 // intervals is the allowed set, smallest first. Order matters: DefaultInterval
@@ -145,8 +180,8 @@ func suggestCoarser(win Window, loc *time.Location) string {
 }
 
 // countBuckets returns how many canonical buckets win has at iv, but never
-// materializes the axis: it is a cheap guard for ResolveInterval, not an axis
-// builder. For counts <= MaxBuckets it MUST agree exactly with
+// materializes an unbounded axis: it is a cheap guard for ResolveInterval, not
+// an axis builder. For counts <= MaxBuckets it MUST agree exactly with
 // len(BucketStarts(win, iv, loc)).
 //
 // Why this exists: building the full axis just to take its length (the old
@@ -156,12 +191,12 @@ func suggestCoarser(win Window, loc *time.Location) string {
 // large is allocated; BucketStarts is only ever called once the count is known
 // to be in-cap.
 //
-//   - Fixed (sub-day) intervals: exact O(1) arithmetic — ceil(span/Duration)
-//     measured from the SNAPPED first bucket, computed with a modulo so a
-//     clamped/huge span cannot overflow.
-//   - Calendar (1d) intervals: step by local date like BucketStarts, but stop
-//     the moment the count passes MaxBuckets so an absurd span can't walk
-//     centuries.
+//   - ≤1h intervals: exact O(1) arithmetic — ceil(span/Duration) measured from
+//     the SNAPPED first bucket, computed with a modulo so a clamped/huge span
+//     cannot overflow.
+//   - Calendar (1d) and wall-clock (6h) intervals: walk the same intended
+//     boundaries BucketStarts does (walkWallClock), but stop the moment the
+//     count passes MaxBuckets so an absurd span can't walk centuries.
 //
 // The fixed branch must measure from fixedAxisStart, not from win.Start: an
 // off-grid window's axis begins at the grid cell CONTAINING the start, so it can
@@ -177,33 +212,26 @@ func countBuckets(win Window, iv Interval, loc *time.Location) int {
 		return 0
 	}
 
-	if !iv.Calendar {
-		// Fixed step: ceil(span/Duration) from the snapped first bucket.
-		// time.Time.Sub clamps an enormous range to the max Duration, so avoid
-		// the (span+Duration-1) form that would overflow and compute ceil via a
-		// modulo instead.
-		first := fixedAxisStart(win.Start.In(loc), iv, loc)
-		span := win.Stop.Sub(first)
-		n := span / iv.Duration
-		if span%iv.Duration != 0 {
+	if iv.Calendar || iv.wallClock() {
+		n := 0
+		walkAxis(win, iv, loc, func(time.Time) bool {
 			n++
-		}
-		return int(n)
+			return n <= MaxBuckets // enough to fail the cap; don't keep walking
+		})
+		return n
 	}
 
-	// Calendar: step by local date, anchored at the local midnight of the start
-	// date, exactly as BucketStarts does — but bail out once over the cap.
-	start := win.Start.In(loc)
-	cur := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, loc)
-	n := 0
-	for cur.Before(win.Stop) {
+	// Fixed step: ceil(span/Duration) from the snapped first bucket.
+	// time.Time.Sub clamps an enormous range to the max Duration, so avoid the
+	// (span+Duration-1) form that would overflow and compute ceil via a modulo
+	// instead.
+	first := fixedAxisStart(win.Start, iv)
+	span := win.Stop.Sub(first)
+	n := span / iv.Duration
+	if span%iv.Duration != 0 {
 		n++
-		if n > MaxBuckets {
-			return n // enough to fail the cap; don't keep walking
-		}
-		cur = time.Date(cur.Year(), cur.Month(), cur.Day()+1, 0, 0, 0, 0, loc)
 	}
-	return n
+	return int(n)
 }
 
 // sortedTokens is a stable helper for any caller that wants the allowed tokens

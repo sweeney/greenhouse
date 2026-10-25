@@ -3,6 +3,7 @@ package climate
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"sort"
 	"time"
@@ -163,48 +164,35 @@ type SeriesResponse struct {
 	Series  []Series    `json:"series"`
 }
 
-// fixedAxisStart returns the first canonical bucket start for a FIXED (sub-day)
-// interval: start snapped DOWN onto the interval grid anchored at the local
-// midnight of start's own date in loc. start is expected to already be in loc.
+// fixedAxisStart returns the first canonical bucket start for a ≤1h interval:
+// start snapped DOWN onto the absolute grid. Truncate rounds down to a multiple
+// of iv.Duration since Go's zero time, which is a UTC midnight, so for every
+// interval that divides an hour this is the UTC grid influx.windowLocation
+// asks Influx to window on (issue #36).
 //
-// Snapping is what keeps the Go-owned axis on the same boundaries as Influx.
-// influx.BuildFieldSeriesFlux calls aggregateWindow with
-// location: timezone.location(tz), which anchors its windows to local midnight
-// in that zone, so its timeSrc:"_start" stamps land on the grid regardless of
-// where the query range begins. An UNSNAPPED axis stepping straight off a
-// caller-derived start therefore had boundaries Influx could never exact-match,
-// and resolveBucket's snap-back rule — correct for a right-edge or interior
-// stamp — could not tell those apart from an Influx LEFT edge falling inside a
-// Go bucket. Every row landed in the preceding bucket and the whole series was
-// reported one bucket early. That hit every "<N>h" rolling window (their start
-// is now - N hours, deliberately not midnight-aligned) and any custom `from` off
-// the grid, at every sub-day interval. See issue #18.
+// Snapping is what keeps the Go-owned axis on the same boundaries as Influx,
+// whose timeSrc:"_start" stamps land on the grid regardless of where the query
+// range begins. An UNSNAPPED axis stepping straight off a caller-derived start
+// had boundaries Influx could never exact-match, and resolveBucket's snap-back
+// rule — correct for a right-edge or interior stamp — could not tell those
+// apart from an Influx LEFT edge falling inside a Go bucket. Every row landed in
+// the preceding bucket and the whole series was reported one bucket early. That
+// hit every "<N>h" rolling window and any custom `from` off the grid, at every
+// sub-day interval. See issue #18.
 //
-// Anchoring at LOCAL MIDNIGHT rather than the Unix epoch is the load-bearing
-// part: a 6h grid must be 00/06/12/18 local in both GMT and BST, which an
-// epoch-anchored (UTC) grid gets an hour wrong for the whole of British Summer
-// Time.
+// It used to anchor at the LOCAL MIDNIGHT of start's date. For ≤1h in a
+// whole-hour zone (config refuses any other) that is the same grid, so labels
+// are unchanged; the absolute grid just says so without a zone in the way. 6h
+// no longer comes through here at all — it is a wall-clock interval
+// (walkAxis), which is what removed the old known caveat that a fixed 6h step
+// drifted an hour off the local grid after a clock change.
 //
 // Accepted trade: for an off-grid window the first bucket widens back to its
 // grid boundary, so it is labelled a little before win.Start. That slice carries
 // no in-window data — the query range still starts at win.Start — and the
 // alternative is the shifted axis above. Countinghouse made the same trade.
-//
-// Known caveat, pre-existing and unchanged by the snap: a sub-day interval over
-// a window that CROSSES a DST transition still steps by fixed duration from this
-// anchor, so after the changeover it drifts an hour off Flux's stretched local
-// grid. It needs both a sub-day interval and a window spanning the transition;
-// the calendar (1d) branch is unaffected.
-func fixedAxisStart(start time.Time, iv Interval, loc *time.Location) time.Time {
-	anchor := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, loc)
-	off := start.Sub(anchor) % iv.Duration
-	if off < 0 {
-		// Defensive: a zone whose local midnight does not exist could put start
-		// before its own anchor. Go's % keeps the dividend's sign, so normalise
-		// to [0, Duration) rather than snapping FORWARD past the window start.
-		off += iv.Duration
-	}
-	return start.Add(-off)
+func fixedAxisStart(start time.Time, iv Interval) time.Time {
+	return start.Truncate(iv.Duration)
 }
 
 // BucketStarts returns the canonical local-timezone bucket-start axis for win
@@ -212,39 +200,148 @@ func fixedAxisStart(start time.Time, iv Interval, loc *time.Location) time.Time 
 // including) win.Stop. This axis is the single source of truth every series
 // aligns to; Influx results are demuxed onto it and gaps are NaN-filled.
 //
-// For calendar intervals (1d) the axis steps by CALENDAR day in loc using
-// time.Date(year, month, day+1, ...), so a London day that is 23h (spring
-// forward) or 25h (autumn back) is still a single bucket starting at local
-// midnight — DST-correct. For fixed (sub-day) intervals the axis steps by
-// iv.Duration from fixedAxisStart, i.e. from the grid cell CONTAINING the
-// window start rather than from the raw start — see fixedAxisStart for why.
+// The axis is built three ways, one per kind of interval, and each matches the
+// grid its readings are actually windowed on (issue #36; see Interval):
+//
+//   - ≤1h (5m/15m/30m/1h) is the ABSOLUTE grid: fixedAxisStart, then stepped by
+//     iv.Duration. That is the UTC grid the query windows on, so every row's
+//     _start stamp exact-matches a bucket. On the autumn changeover day the
+//     repeated hour is two distinct sets of buckets (01:00 BST and 01:00 GMT)
+//     and the day has 25 hours of them; in spring the missing hour simply does
+//     not appear and the day has 23. The query used to ask Influx for LOCAL
+//     wall-clock windows, which stretch across the repeated hour (the 01:45 BST
+//     window at 15m ran to 02:00 GMT), so the buckets inside it came back null.
+//     The query moved, not this axis.
+//   - Wall-clock (6h) steps LOCAL wall-clock hours from local midnight, so the
+//     buckets are 00/06/12/18 local on both sides of a change and the bucket
+//     that straddles one is 7h (autumn) or 5h (spring). It used to step a fixed
+//     6h, which drifted an hour off that grid after either change (autumn:
+//     00:00+01:00, 05:00Z, 11:00Z, 17:00Z). Its readings are queried at 1h and
+//     folded onto this axis (see BuildSeries).
+//   - Calendar (1d) steps by CALENDAR day in loc, so a London day that is 23h
+//     (spring forward) or 25h (autumn back) is still a single bucket starting
+//     at local midnight. Influx's location-aware aggregateWindow stretches its
+//     daily windows the same way.
+//
+// The 1d and 6h boundaries are INTENDED wall times, each resolved into loc on
+// its own (walkAxis, resolveWall). A boundary a clock change skips (a zone whose
+// clocks go forward at local midnight, like America/Santiago) starts at the
+// transition instant, and an ambiguous one at its first occurrence; neither can
+// shift the boundaries after it.
 //
 // countBuckets in interval.go computes this axis's LENGTH without materializing
-// it, to guard MaxBuckets cheaply. The two must agree exactly for any in-cap
-// window; both derive the first fixed bucket from fixedAxisStart so they cannot
-// drift apart.
+// an unbounded one, to guard MaxBuckets cheaply. The two must agree exactly for
+// any in-cap window; both derive the first ≤1h bucket from fixedAxisStart and
+// walk the 1d/6h boundaries with walkAxis, so they cannot drift apart.
+//
+// Returned times are in loc, so they serialise with the local offset.
 func BucketStarts(win Window, iv Interval, loc *time.Location) []time.Time {
 	if loc == nil {
 		loc = time.UTC
 	}
-	start := win.Start.In(loc)
-	stop := win.Stop
-
 	var out []time.Time
-	if iv.Calendar {
-		// Step by calendar day, anchored at the local midnight of start's date.
-		cur := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, loc)
-		for cur.Before(stop) {
-			out = append(out, cur)
-			cur = time.Date(cur.Year(), cur.Month(), cur.Day()+1, 0, 0, 0, 0, loc)
-		}
+	if iv.Calendar || iv.wallClock() {
+		walkAxis(win, iv, loc, func(b time.Time) bool {
+			out = append(out, b)
+			return true
+		})
 		return out
 	}
-
-	for cur := fixedAxisStart(start, iv, loc); cur.Before(stop); cur = cur.Add(iv.Duration) {
+	for cur := fixedAxisStart(win.Start, iv).In(loc); cur.Before(win.Stop); cur = cur.Add(iv.Duration) {
 		out = append(out, cur)
 	}
 	return out
+}
+
+// walkAxis visits, in order, the bucket starts of a calendar (1d) or wall-clock
+// (6h) axis for win in loc, until visit returns false or the next start is not
+// before win.Stop. It is the one stepping behind both BucketStarts and
+// countBuckets for those intervals.
+//
+// The first boundary is the wall-clock boundary at or before win.Start: local
+// midnight of its date for 1d, the containing 00/06/12/18 for 6h. Hour() reads
+// the wall clock, so a start inside the repeated hour (either occurrence of
+// 01:xx) snaps to 00:00 local.
+//
+// Each INTENDED boundary is resolved on its own, never stepped from the previous
+// resolved instant (countinghouse PR #50 review). Stepping from the resolved
+// instant carried any resolution error forward for the rest of the window:
+//
+//   - 6h, America/Santiago 2026-09-06 (00:00 → 01:00): the missing 00:00
+//     resolved to 23:00 the day before, and every later step inherited the hour,
+//     leaving the axis on 05/11/17/23 for good.
+//   - 1d, same day: the missing midnight resolved into the 5th, so "the next
+//     day's midnight" was the 6th's again, the same instant came back, and the
+//     loop never ended — hanging any /series request across the change.
+//
+// The "not after the previous" guard is belt and braces: resolveWall maps each
+// intended boundary to an instant no earlier than the previous one, so it never
+// fires for a real zone, but a loop driven by tzdata must not be able to spin.
+func walkAxis(win Window, iv Interval, loc *time.Location, visit func(time.Time) bool) {
+	start := win.Start.In(loc)
+	var w time.Time
+	var next func(time.Time) time.Time
+	if iv.Calendar {
+		w = wallTime(start.Year(), start.Month(), start.Day(), 0)
+		next = func(w time.Time) time.Time { return w.AddDate(0, 0, 1) }
+	} else {
+		step := int(iv.Duration / time.Hour)
+		w = wallTime(start.Year(), start.Month(), start.Day(), start.Hour()-start.Hour()%step)
+		next = func(w time.Time) time.Time { return w.Add(iv.Duration) }
+	}
+	var prev time.Time
+	for ; ; w = next(w) {
+		cur := resolveWall(w, loc)
+		if !cur.Before(win.Stop) {
+			return
+		}
+		if !prev.IsZero() && !cur.After(prev) {
+			continue // a boundary swallowed by a clock change: no empty bucket
+		}
+		if !visit(cur) {
+			return
+		}
+		prev = cur
+	}
+}
+
+// wallTime is a LOCAL wall-clock reading (year, month, day, hour) held as a
+// zone-free value: a time.Time in UTC used purely as a calendar, so that adding
+// hours or days to it is plain wall-clock arithmetic with no clock change in the
+// way. resolveWall turns it into a real instant in a zone.
+func wallTime(year int, month time.Month, day, hour int) time.Time {
+	return time.Date(year, month, day, hour, 0, 0, 0, time.UTC)
+}
+
+// resolveWall returns the instant at which the local wall time w (see
+// wallTime) begins in loc.
+//
+//   - An ordinary wall time is just itself.
+//   - An AMBIGUOUS one (the repeated hour after a clock goes back) is its FIRST
+//     occurrence, which is what time.Date returns and is when that wall time
+//     first begins — so a day whose midnight repeats starts at the first.
+//   - A wall time that does NOT EXIST (skipped when a clock goes forward) is the
+//     transition instant: the boundary is "the moment the clock reached this
+//     time", and on a spring-forward day the clock reaches 00:00 by jumping past
+//     it. time.Date leaves the choice of side unspecified (it currently picks
+//     the instant just BEFORE the transition, which reads as the previous wall
+//     hour), so the side it picked is detected and the zone boundary on that
+//     side is taken.
+func resolveWall(w time.Time, loc *time.Location) time.Time {
+	t := time.Date(w.Year(), w.Month(), w.Day(), w.Hour(), 0, 0, 0, loc)
+	got := wallTime(t.Year(), t.Month(), t.Day(), t.Hour())
+	switch {
+	case got.Equal(w):
+		return t
+	case got.Before(w):
+		// Resolved short of the gap, in the zone period that ends at it.
+		_, end := t.ZoneBounds()
+		return end
+	default:
+		// Resolved past the gap, in the zone period that starts at it.
+		start, _ := t.ZoneBounds()
+		return start
+	}
 }
 
 // RoundValue rounds a climate value to the standard display precision (ValueDP),
@@ -631,10 +728,11 @@ func environmentalIDs(devices map[string]config.DeviceConfig) []string {
 	return out
 }
 
-// BuildSeries is the orchestrator: it runs ONE Influx query (the field series
-// across the environmental device set), demuxes the bucketed rows onto the
-// canonical axis, and calls AssembleSeries. The query count is independent of
-// device count: the builder fans out across the device set via contains(set).
+// BuildSeries is the orchestrator: it queries the field series across the
+// environmental device set, demuxes the bucketed rows onto the canonical axis,
+// and calls AssembleSeries. The query count is independent of device count: the
+// builder fans out across the device set via contains(set). It is ONE query,
+// except a wall-clock mean, which is two (see foldWallClock).
 //
 // bucket is the Influx bucket name; win the resolved window; iv the resolved
 // interval; field+fn the measurement to chart; groupBy the grouping mode;
@@ -644,8 +742,8 @@ func environmentalIDs(devices map[string]config.DeviceConfig) []string {
 // ValidFnForField / ValidGroupFn).
 //
 // fn and groupFn are applied in that ORDER and do not commute: fn collapses each
-// device's samples within a bucket inside Influx, then groupFn combines the
-// group's devices here in Go.
+// device's samples within a bucket (inside Influx, completed by the fold for a
+// wall-clock interval), then groupFn combines the group's devices here in Go.
 func BuildSeries(
 	ctx context.Context,
 	q influx.Querier,
@@ -661,19 +759,21 @@ func BuildSeries(
 		loc = time.UTC
 	}
 	buckets := BucketStarts(win, iv, loc)
-	idx := bucketIndex(buckets)
 	tz := loc.String()
 
 	ids := environmentalIDs(devices)
 
 	valueByDevice := map[string][]float64{}
 	if len(ids) > 0 {
-		flux := influx.BuildFieldSeriesFlux(bucket, ids, field, fn, win.Start, win.Stop, iv.Token, tz)
-		rows, err := q.Query(ctx, flux)
+		var err error
+		if iv.wallClock() {
+			valueByDevice, err = foldWallClock(ctx, q, bucket, ids, field, fn, win, buckets, loc)
+		} else {
+			valueByDevice, err = querySeries(ctx, q, bucket, ids, field, fn, win, iv.Token, tz, buckets)
+		}
 		if err != nil {
 			return SeriesResponse{}, err
 		}
-		demux(rows, idx, valueByDevice, len(buckets))
 	}
 
 	series := AssembleSeries(buckets, devices, valueByDevice, groupBy, field, groupFn, groupLabels)
@@ -697,6 +797,145 @@ func BuildSeries(
 		Buckets:  buckets,
 		Series:   series,
 	}, nil
+}
+
+// querySeries runs one field-series query at token and demuxes it onto buckets,
+// returning id → per-bucket values (NaN for gaps).
+func querySeries(ctx context.Context, q influx.Querier, bucket string, ids []string, field, fn string, win Window, token, tz string, buckets []time.Time) (map[string][]float64, error) {
+	flux := influx.BuildFieldSeriesFlux(bucket, ids, field, fn, win.Start, win.Stop, token, tz)
+	rows, err := q.Query(ctx, flux)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]float64{}
+	demux(rows, bucketIndex(buckets), out, len(buckets))
+	return out, nil
+}
+
+// foldWallClock produces per-device values for a WALL-CLOCK (6h) axis (issue
+// #36). Influx cannot be asked for those windows: location-aware 6h windows are
+// the stretched local shape, and UTC 6h windows sit an hour off 00/06/12/18
+// local all summer. So the readings are queried at 1h on the UTC grid — every
+// local 6h boundary of a whole-hour zone is a UTC hour boundary — and each hour
+// is folded into the display bucket that contains it.
+//
+// Climate is NOT additive, so how an hour folds depends on fn, and each fold is
+// chosen to equal what Influx's own aggregate over the whole 6h window would
+// have been (so a 6h chart away from a clock change is unchanged):
+//
+//   - min / max: the min / max of the hourly mins / maxes.
+//   - last: the latest hour that has a reading, which holds the bucket's last
+//     reading.
+//   - mean: NOT a mean of hourly means. Sensors report on change, so an hour
+//     can hold 60 readings or 3, and averaging hourly means would weight the
+//     sparse hour like the dense one. The readings are queried as hourly SUM
+//     and COUNT instead (a second query) and folded as Σsum / Σcount, which is
+//     exactly the sample mean of the 6h window.
+//
+// A display bucket with no reading in any of its hours stays NaN (a gap). The
+// cross-member group_fn runs after this, in AssembleSeries, exactly as for any
+// other interval, so fn-then-group_fn order is preserved.
+func foldWallClock(ctx context.Context, q influx.Querier, bucket string, ids []string, field, fn string, win Window, buckets []time.Time, loc *time.Location) (map[string][]float64, error) {
+	fine, ok := lookupInterval("1h")
+	if !ok {
+		return nil, fmt.Errorf("climate: 1h interval missing") // unreachable: "1h" is in the allowed set
+	}
+	fineBuckets := BucketStarts(win, fine, loc)
+	into := foldIndex(fineBuckets, buckets)
+	tz := loc.String()
+	n := len(buckets)
+
+	out := map[string][]float64{}
+	switch fn {
+	case "mean":
+		sums, err := querySeries(ctx, q, bucket, ids, field, influx.FnSum, win, fine.Token, tz, fineBuckets)
+		if err != nil {
+			return nil, err
+		}
+		counts, err := querySeries(ctx, q, bucket, ids, field, influx.FnCount, win, fine.Token, tz, fineBuckets)
+		if err != nil {
+			return nil, err
+		}
+		for id, sum := range sums {
+			out[id] = foldMean(sum, counts[id], into, n)
+		}
+	case "min", "max", "last":
+		vals, err := querySeries(ctx, q, bucket, ids, field, fn, win, fine.Token, tz, fineBuckets)
+		if err != nil {
+			return nil, err
+		}
+		for id, v := range vals {
+			out[id] = foldExtreme(fn, v, into, n)
+		}
+	default:
+		return nil, fmt.Errorf("climate: no wall-clock fold for fn %q", fn)
+	}
+	return out, nil
+}
+
+// foldIndex maps each fine bucket to the display bucket containing it (the
+// greatest display start at or before it), or -1 for one before the first.
+// Containment by timestamp rather than a fixed ratio, because a 6h bucket that
+// straddles a clock change holds 7 or 5 hours.
+func foldIndex(fine, display []time.Time) []int {
+	into := make([]int, len(fine))
+	j := -1
+	for i, f := range fine {
+		for j+1 < len(display) && !display[j+1].After(f) {
+			j++
+		}
+		into[i] = j
+	}
+	return into
+}
+
+// foldMean folds hourly sums and counts into Σsum/Σcount per display bucket.
+// An hour with no reading (NaN sum, or a count of 0) contributes nothing; a
+// bucket none of whose hours has one is NaN.
+func foldMean(sum, count []float64, into []int, n int) []float64 {
+	s := make([]float64, n)
+	c := make([]float64, n)
+	for i, j := range into {
+		if j < 0 || i >= len(sum) || i >= len(count) {
+			continue
+		}
+		if math.IsNaN(sum[i]) || math.IsNaN(count[i]) || count[i] <= 0 {
+			continue
+		}
+		s[j] += sum[i]
+		c[j] += count[i]
+	}
+	out := make([]float64, n)
+	for j := range out {
+		if c[j] == 0 {
+			out[j] = math.NaN()
+			continue
+		}
+		out[j] = s[j] / c[j]
+	}
+	return out
+}
+
+// foldExtreme folds hourly min/max/last values onto the display buckets.
+func foldExtreme(fn string, v []float64, into []int, n int) []float64 {
+	out := make([]float64, n)
+	for j := range out {
+		out[j] = math.NaN()
+	}
+	for i, j := range into {
+		if j < 0 || i >= len(v) || math.IsNaN(v[i]) {
+			continue
+		}
+		switch {
+		case math.IsNaN(out[j]), fn == "last":
+			out[j] = v[i] // hours arrive in order, so the latest reading wins
+		case fn == "min":
+			out[j] = math.Min(out[j], v[i])
+		case fn == "max":
+			out[j] = math.Max(out[j], v[i])
+		}
+	}
+	return out
 }
 
 // echoGroupFn reports the member combine to echo in the response: the resolved

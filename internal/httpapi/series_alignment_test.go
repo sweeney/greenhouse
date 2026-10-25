@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,37 +48,52 @@ type alignedSeriesResp struct {
 }
 
 // rampingReplay wires the fake querier to return what Influx really returns for
-// the window under test: mean-aggregated windows on the LOCAL-MIDNIGHT grid,
+// the window under test: aggregateWindow rows on the grid the FLUX asks for,
 // stamped with timeSrc:"_start", with the first window truncated to the range
 // start. Readings ramp by 1 °C per hour of real time from 10 °C at the window
 // start, so no two hourly buckets share a value.
-func rampingReplay(s *Server, deviceID, spec, token string) func(string) ([]influx.Row, error) {
-	return func(string) ([]influx.Row, error) {
+func rampingReplay(s *Server, deviceID, spec string) func(string) ([]influx.Row, error) {
+	return func(flux string) ([]influx.Row, error) {
 		win, err := climate.ResolveWindow(s.Clock.Now(), s.Loc, spec, time.Time{}, time.Time{})
 		if err != nil {
 			return nil, err
 		}
-		return replayGridRows(deviceID, win, token, s.Loc)
+		return replayGridRows(deviceID, win, flux)
 	}
 }
 
-// replayGridRows produces the aggregateWindow rows for [win.Start, win.Stop) on
-// the local-midnight grid at token. The value of a window is the temperature at
-// its midpoint under a 1 °C-per-hour ramp from the window start.
-func replayGridRows(deviceID string, win climate.Window, token string, loc *time.Location) ([]influx.Row, error) {
-	step, err := time.ParseDuration(token)
+var (
+	replayEveryRe = regexp.MustCompile(`every: (\w+),`)
+	replayFnRe    = regexp.MustCompile(`aggregateWindow\(every: \w+, fn: (\w+),`)
+)
+
+// replayGridRows produces the aggregateWindow rows for [win.Start, win.Stop) at
+// the flux's every: on the UTC grid. The ramp is modelled as continuous: a
+// window's mean is the temperature at its midpoint, its count is its length in
+// minutes (one reading a minute) and its sum is mean × count. That makes the
+// hourly sum/count a 6h mean is folded from (issue #36) fold back to exactly
+// the 6h window's midpoint, as it would for a real linear ramp.
+//
+// It used to step the interval token from local midnight whatever the flux
+// asked for, so it answered a 1h fold query with 6h rows; it now refuses a
+// sub-day window on local time, the shape Influx stretches across a clock
+// change (see influx.GaugeSim).
+func replayGridRows(deviceID string, win climate.Window, flux string) ([]influx.Row, error) {
+	em, fm := replayEveryRe.FindStringSubmatch(flux), replayFnRe.FindStringSubmatch(flux)
+	if em == nil || fm == nil {
+		return nil, fmt.Errorf("replay: no aggregateWindow every:/fn: in flux:\n%s", flux)
+	}
+	step, err := time.ParseDuration(em[1])
 	if err != nil {
 		return nil, err
 	}
-	lt := win.Start.In(loc)
-	anchor := time.Date(lt.Year(), lt.Month(), lt.Day(), 0, 0, 0, 0, loc)
+	if !strings.Contains(flux, "location: timezone.utc,") {
+		return nil, fmt.Errorf("replay: only sub-day windows on timezone.utc are modelled:\n%s", flux)
+	}
 
 	var rows []influx.Row
-	for edge := anchor; edge.Before(win.Stop); edge = edge.Add(step) {
+	for edge := win.Start.Truncate(step); edge.Before(win.Stop); edge = edge.Add(step) {
 		lo, hi := edge, edge.Add(step)
-		if !hi.After(win.Start) {
-			continue
-		}
 		if lo.Before(win.Start) {
 			lo = win.Start // Flux truncates the first window to range start
 		}
@@ -84,10 +101,23 @@ func replayGridRows(deviceID string, win climate.Window, token string, loc *time
 			hi = win.Stop
 		}
 		mid := lo.Add(hi.Sub(lo) / 2)
+		mean := 10 + mid.Sub(win.Start).Hours()
+		minutes := hi.Sub(lo).Minutes()
+		var v float64
+		switch fm[1] {
+		case "mean":
+			v = mean
+		case influx.FnCount:
+			v = minutes
+		case influx.FnSum:
+			v = mean * minutes
+		default:
+			return nil, fmt.Errorf("replay: fn %q not modelled", fm[1])
+		}
 		rows = append(rows, influx.Row{
 			DeviceID: deviceID,
 			Time:     lo, // timeSrc: "_start"
-			Value:    10 + mid.Sub(win.Start).Hours(),
+			Value:    v,
 			HasValue: true,
 		})
 	}
@@ -121,7 +151,7 @@ func TestSeriesHTTP_RollingWindowBucketsAreOnTheGrid(t *testing.T) {
 	} {
 		t.Run(tc.interval, func(t *testing.T) {
 			s, q := alignedSetup(t)
-			q.QueryFunc = rampingReplay(s, "sensor_a", "24h", tc.interval)
+			q.QueryFunc = rampingReplay(s, "sensor_a", "24h")
 
 			w := doGET(t, s, "/series?field=temperature_c&fn=mean&group_by=device&window=24h&interval="+tc.interval)
 			if w.Code != http.StatusOK {
@@ -157,50 +187,59 @@ func TestSeriesHTTP_RollingWindowBucketsAreOnTheGrid(t *testing.T) {
 // with. Before the fix each value was the FOLLOWING span's, so a 1 °C-per-hour
 // ramp read one degree high in every bucket.
 func TestSeriesHTTP_RollingWindowValuesMatchTheirLabel(t *testing.T) {
-	s, q := alignedSetup(t)
-	q.QueryFunc = rampingReplay(s, "sensor_a", "24h", "1h")
+	// 6h is folded from hourly sum and count (issue #36); its values must still
+	// describe the span each bucket is labelled with.
+	for _, tc := range []struct {
+		interval string
+		step     time.Duration
+	}{{"1h", time.Hour}, {"6h", 6 * time.Hour}} {
+		t.Run(tc.interval, func(t *testing.T) {
+			s, q := alignedSetup(t)
+			q.QueryFunc = rampingReplay(s, "sensor_a", "24h")
 
-	win, err := climate.ResolveWindow(s.Clock.Now(), s.Loc, "24h", time.Time{}, time.Time{})
-	if err != nil {
-		t.Fatalf("ResolveWindow: %v", err)
-	}
+			win, err := climate.ResolveWindow(s.Clock.Now(), s.Loc, "24h", time.Time{}, time.Time{})
+			if err != nil {
+				t.Fatalf("ResolveWindow: %v", err)
+			}
 
-	w := doGET(t, s, "/series?field=temperature_c&fn=mean&group_by=device&window=24h&interval=1h")
-	if w.Code != http.StatusOK {
-		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
-	}
-	var resp alignedSeriesResp
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
-	if len(resp.Series) != 1 {
-		t.Fatalf("want 1 series, got %d", len(resp.Series))
-	}
+			w := doGET(t, s, "/series?field=temperature_c&fn=mean&group_by=device&window=24h&interval="+tc.interval)
+			if w.Code != http.StatusOK {
+				t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+			}
+			var resp alignedSeriesResp
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if len(resp.Series) != 1 {
+				t.Fatalf("want 1 series, got %d", len(resp.Series))
+			}
 
-	for i, b := range resp.Buckets {
-		ts, err := time.Parse(time.RFC3339Nano, b)
-		if err != nil {
-			t.Fatalf("bucket %d: %v", i, err)
-		}
-		lo, hi := ts, ts.Add(time.Hour)
-		if lo.Before(win.Start) {
-			lo = win.Start
-		}
-		if hi.After(win.Stop) {
-			hi = win.Stop
-		}
-		mid := lo.Add(hi.Sub(lo) / 2)
-		want := climate.RoundValue(10 + mid.Sub(win.Start).Hours())
+			for i, b := range resp.Buckets {
+				ts, err := time.Parse(time.RFC3339Nano, b)
+				if err != nil {
+					t.Fatalf("bucket %d: %v", i, err)
+				}
+				lo, hi := ts, ts.Add(tc.step)
+				if lo.Before(win.Start) {
+					lo = win.Start
+				}
+				if hi.After(win.Stop) {
+					hi = win.Stop
+				}
+				mid := lo.Add(hi.Sub(lo) / 2)
+				exact := 10 + mid.Sub(win.Start).Hours()
 
-		got := resp.Series[0].Values[i]
-		if got == nil {
-			t.Errorf("bucket %d (%s) is null, want %v", i, b, want)
-			continue
-		}
-		if math.Abs(*got-want) > 1e-9 {
-			t.Errorf("bucket %d (%s) = %v, want %v (value must describe the span it is labelled with)",
-				i, b, *got, want)
-		}
+				got := resp.Series[0].Values[i]
+				if got == nil {
+					t.Errorf("bucket %d (%s) is null, want %v", i, b, climate.RoundValue(exact))
+					continue
+				}
+				if math.Abs(*got-exact) > 0.005+1e-9 {
+					t.Errorf("bucket %d (%s) = %v, want %v (value must describe the span it is labelled with)",
+						i, b, *got, climate.RoundValue(exact))
+				}
+			}
+		})
 	}
 }
 
@@ -209,7 +248,7 @@ func TestSeriesHTTP_RollingWindowValuesMatchTheirLabel(t *testing.T) {
 // that rows does not regress independently.
 func TestSeriesHTTP_RowsShapeSharesTheAlignedAxis(t *testing.T) {
 	s, q := alignedSetup(t)
-	q.QueryFunc = rampingReplay(s, "sensor_a", "24h", "1h")
+	q.QueryFunc = rampingReplay(s, "sensor_a", "24h")
 
 	w := doGET(t, s, "/series?field=temperature_c&fn=mean&group_by=device&window=24h&interval=1h&shape=rows")
 	if w.Code != http.StatusOK {
@@ -244,7 +283,7 @@ func TestSeriesHTTP_RowsShapeSharesTheAlignedAxis(t *testing.T) {
 // which builds its own window and axis through the same helpers.
 func TestDeviceSeriesHTTP_RollingWindowIsAligned(t *testing.T) {
 	s, q := alignedSetup(t)
-	q.QueryFunc = rampingReplay(s, "sensor_a", "48h", "1h")
+	q.QueryFunc = rampingReplay(s, "sensor_a", "48h")
 
 	w := doGET(t, s, "/devices/sensor_a/series?field=temperature_c&fn=mean&window=48h&interval=1h")
 	if w.Code != http.StatusOK {
@@ -272,7 +311,7 @@ func TestDeviceSeriesHTTP_RollingWindowIsAligned(t *testing.T) {
 // pages use was affected too.
 func TestSeriesHTTP_DefaultIntervalRollingIsAligned(t *testing.T) {
 	s, q := alignedSetup(t)
-	q.QueryFunc = rampingReplay(s, "sensor_a", "24h", "1h")
+	q.QueryFunc = rampingReplay(s, "sensor_a", "24h")
 
 	w := doGET(t, s, "/series?field=temperature_c&window=24h")
 	if w.Code != http.StatusOK {
@@ -302,7 +341,7 @@ func TestSeriesHTTP_AxisDoesNotMoveWithNow(t *testing.T) {
 	for _, drift := range []time.Duration{0, 37 * time.Second, 11 * time.Minute, 41 * time.Minute} {
 		s, q := alignedSetup(t)
 		s.Clock = testutil.NewFakeClock(base.Add(drift))
-		q.QueryFunc = rampingReplay(s, "sensor_a", "24h", "1h")
+		q.QueryFunc = rampingReplay(s, "sensor_a", "24h")
 
 		w := doGET(t, s, "/series?field=temperature_c&fn=mean&window=24h&interval=1h")
 		if w.Code != http.StatusOK {
@@ -336,7 +375,7 @@ func TestSeriesHTTP_OnGridWindowsUnchanged(t *testing.T) {
 	for _, spec := range []string{"today", "7d"} {
 		for _, iv := range []string{"1h", "6h"} {
 			s, q := alignedSetup(t)
-			q.QueryFunc = rampingReplay(s, "sensor_a", spec, iv)
+			q.QueryFunc = rampingReplay(s, "sensor_a", spec)
 
 			w := doGET(t, s, fmt.Sprintf("/series?field=temperature_c&fn=mean&window=%s&interval=%s", spec, iv))
 			if w.Code != http.StatusOK {

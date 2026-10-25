@@ -5,9 +5,68 @@ import (
 	"time"
 )
 
+// intervalDurations mirrors climate's allowed interval tokens, so the builder
+// can tell a calendar day from a sub-day interval without importing climate.
+var intervalDurations = map[string]time.Duration{
+	"5m":  5 * time.Minute,
+	"15m": 15 * time.Minute,
+	"30m": 30 * time.Minute,
+	"1h":  time.Hour,
+	"6h":  6 * time.Hour,
+	"1d":  24 * time.Hour,
+}
+
+// windowLocation renders the aggregateWindow location: argument for a series
+// query at `interval` in the house timezone `tz` (issue #36).
+//
+// Only a CALENDAR interval (1d) is windowed on local time. Every sub-day
+// interval is windowed on the UTC grid, and that is deliberate:
+//
+//   - Influx's location-aware aggregateWindow lays sub-day windows on LOCAL
+//     WALL CLOCK. On the autumn clock change (Europe/London, 02:00 BST →
+//     01:00 GMT) the window that opens just before the change runs to the next
+//     wall time that only happens once, 02:00 GMT. At 15m the 01:45 BST window
+//     was 75 minutes long, nothing was stamped inside the repeated hour, and
+//     /series reported every probe as null for 01:00Z–01:45Z. Observed in prod
+//     on 2026-10-25; countinghouse hit the same thing (#49).
+//   - The UTC grid has no repeated or missing hour to mishandle: every window
+//     is exactly `every` long. For a zone whose offset is always a whole number
+//     of hours (config refuses any other; see config.checkWholeHourZone) the
+//     UTC grid at 1h and finer IS the local grid, so bucket labels do not move —
+//     only the clock-change hours stop being stretched.
+//   - A calendar day is the one place stretching is right: the London day is
+//     23h or 25h across a change and should still be ONE bucket from local
+//     midnight to local midnight. Flux gets that right, so 1d keeps location:.
+//
+// 6h is never queried at its own width: climate queries it at 1h and folds onto
+// a local wall-clock axis in Go, because a 6h UTC grid is not the 00/06/12/18
+// local grid in BST. A 6h token passed here is windowed on UTC like any
+// sub-day interval — correct as UTC windows, and never what /series asks for.
+//
+// The UTC case is spelled out (timezone.utc) rather than left to Flux's default
+// so a script-level `option location` can never change it. UTC is also the
+// DEFAULT: only an interval known to be a day or longer gets the named zone, so
+// a token added to climate's intervals and not mirrored above fails safe.
+func windowLocation(interval, tz string) string {
+	if d, ok := intervalDurations[interval]; ok && d >= 24*time.Hour {
+		return fmt.Sprintf("timezone.location(name: %q)", tz)
+	}
+	return "timezone.utc"
+}
+
+// FnSum and FnCount are the two per-bucket aggregates climate folds a coarse
+// MEAN from (issue #36): a 6h mean is Σsum/Σcount over the bucket's hours,
+// which is exactly the sample mean Influx would give for the whole window. They
+// are internal building blocks, never a caller-selectable fn — a sum of
+// temperatures is not a climate answer, only the numerator of one.
+const (
+	FnSum   = "sum"
+	FnCount = "count"
+)
+
 // BuildFieldSeriesFlux builds the per-bucket climate series for ONE field over a
-// SET of devices, aggregated with fn (mean/min/max/last) on DST-aware local
-// buckets. It is the heart of greenhouse: a plain gauge query over the
+// SET of devices, aggregated with fn (mean/min/max/last, or the FnSum/FnCount
+// fold parts). It is the heart of greenhouse: a plain gauge query over the
 // device_environment measurement with no counter/integral/reset handling
 // (climate fields are not cumulative).
 //
@@ -15,9 +74,11 @@ import (
 //   - the device set fans out across devices via contains(set: [...]), keeping
 //     the query count independent of device count.
 //   - aggregateWindow(every: interval, fn: <fn>, timeSrc: "_start",
-//     location: timezone.location(tz), createEmpty: true) collapses each bucket
-//     to its aggregate on DST-aware local boundaries, emitting empty buckets so
-//     the axis is dense.
+//     location: <windowLocation>, createEmpty: true) collapses each bucket to
+//     its aggregate — on the UTC grid for a sub-day interval, on local calendar
+//     days for 1d (issue #36) — emitting empty buckets so the axis is dense.
+//   - fn: count yields an INTEGER _value, which the client decodes as no value
+//     (it reads float64 only), so it is converted with toFloat().
 //
 // timeSrc:"_start" is REQUIRED: Influx's aggregateWindow stamps the right edge
 // (_stop) by default, which shifts every value one bucket late relative to the
@@ -32,13 +93,13 @@ import (
 // history, which is a config change, not a change to this query. Harmless while one
 // site writes to the bucket; must land before a second one does.
 func BuildFieldSeriesFlux(bucket string, deviceIDs []string, field, fn string, start, stop time.Time, interval, tz string) string {
-	return fmt.Sprintf(`import "timezone"
+	flux := fmt.Sprintf(`import "timezone"
 
 from(bucket: %q)
   |> range(start: %s, stop: %s)
   |> filter(fn: (r) => r._measurement == "device_environment" and r._field == %q)
   |> filter(fn: (r) => contains(value: r.device_id, set: %s))
-  |> aggregateWindow(every: %s, fn: %s, timeSrc: "_start", location: timezone.location(name: %q), createEmpty: true)`,
+  |> aggregateWindow(every: %s, fn: %s, timeSrc: "_start", location: %s, createEmpty: true)`,
 		bucket,
 		fluxTime(start),
 		fluxTime(stop),
@@ -46,8 +107,12 @@ from(bucket: %q)
 		deviceSet(deviceIDs),
 		interval,
 		fn,
-		tz,
+		windowLocation(interval, tz),
 	)
+	if fn == FnCount {
+		flux += "\n  |> toFloat()"
+	}
+	return flux
 }
 
 // DefaultLatestLookback bounds how far GET /devices/{id}/latest looks back for a
