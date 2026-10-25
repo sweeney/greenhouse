@@ -34,7 +34,7 @@ func TestBuildFieldSeriesFlux(t *testing.T) {
 		`r._measurement == "device_environment"`,
 		`r._field == "temperature_c"`,
 		`contains(value: r.device_id, set: ["sensor_a", "outdoor_station"])`,
-		`aggregateWindow(every: 1h, fn: mean, timeSrc: "_start", location: timezone.location(name: "Europe/London"), createEmpty: true)`,
+		`aggregateWindow(every: 1h, fn: mean, timeSrc: "_start", location: timezone.utc, createEmpty: true)`,
 		// No pad for a gauge series: range starts AT the window start.
 		`start: 2026-06-11T00:00:00Z`,
 		`stop: 2026-06-12T00:00:00Z`,
@@ -49,6 +49,46 @@ func TestBuildFieldSeriesFlux(t *testing.T) {
 	for _, bad := range []string{`energy_kwh`, `power_w`, `increase()`, `difference()`, `integral(`, `device_power`} {
 		if strings.Contains(flux, bad) {
 			t.Errorf("field series flux unexpectedly contains %q (energy concept)", bad)
+		}
+	}
+}
+
+// TestBuildFieldSeriesFlux_WindowLocation pins the grid each interval is
+// windowed on (issue #36). Influx lays a SUB-DAY window on a named location on
+// local wall clock and stretches the one straddling the autumn repeated hour
+// (at 15m, 01:45 BST ran to 02:00 GMT and nothing was stamped inside the hour),
+// so every sub-day interval must window on the UTC grid, spelled out so a
+// script-level `option location` cannot change it. Only a calendar day keeps the
+// house zone, where a 23h/25h day as one bucket is exactly what is wanted.
+func TestBuildFieldSeriesFlux_WindowLocation(t *testing.T) {
+	for _, iv := range []string{"5m", "15m", "30m", "1h", "6h"} {
+		flux := BuildFieldSeriesFlux("statehouse", []string{"d"}, "temperature_c", "mean", seriesStart, seriesStop, iv, "Europe/London")
+		if !strings.Contains(flux, "location: timezone.utc,") {
+			t.Errorf("%s: sub-day series must window on location: timezone.utc\n%s", iv, flux)
+		}
+		if strings.Contains(flux, "timezone.location(") {
+			t.Errorf("%s: sub-day series must not window on local time (stretches across a clock change)\n%s", iv, flux)
+		}
+	}
+	flux := BuildFieldSeriesFlux("statehouse", []string{"d"}, "temperature_c", "mean", seriesStart, seriesStop, "1d", "Europe/London")
+	if !strings.Contains(flux, `location: timezone.location(name: "Europe/London"),`) {
+		t.Errorf("1d must window on local calendar days\n%s", flux)
+	}
+}
+
+// TestBuildFieldSeriesFlux_CountIsFloat: the 6h mean is folded from hourly sum
+// and count (issue #36). Flux's count yields an integer _value, which the client
+// decodes as no value at all (it reads float64 only), so the builder must
+// convert it — otherwise every folded mean would read as a gap.
+func TestBuildFieldSeriesFlux_CountIsFloat(t *testing.T) {
+	flux := BuildFieldSeriesFlux("statehouse", []string{"d"}, "temperature_c", "count", seriesStart, seriesStop, "1h", "Europe/London")
+	if !strings.Contains(flux, "fn: count,") || !strings.HasSuffix(strings.TrimSpace(flux), "|> toFloat()") {
+		t.Errorf("count series must end in toFloat()\n%s", flux)
+	}
+	for _, fn := range []string{"mean", "min", "max", "last", "sum"} {
+		flux := BuildFieldSeriesFlux("statehouse", []string{"d"}, "temperature_c", fn, seriesStart, seriesStop, "1h", "Europe/London")
+		if strings.Contains(flux, "toFloat") {
+			t.Errorf("%s: only count needs converting\n%s", fn, flux)
 		}
 	}
 }
