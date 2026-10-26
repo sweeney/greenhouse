@@ -125,12 +125,24 @@ func gaugeSimWindowing(flux string) (time.Duration, *time.Location, error) {
 // Answer resolves one Flux script against the registered readings. Its
 // signature matches FakeQuerier.QueryFunc, so a test wanting FakeQuerier's
 // query recording can wire it in as `&FakeQuerier{QueryFunc: sim.Answer}`.
+//
+// Two shapes are modelled, both read from the flux rather than assumed:
+//
+//   - aggregateWindow(every:, fn:, …) — BuildFieldSeriesFlux. A count is a
+//     Flux INTEGER, which the client decodes as no value, so a count row
+//     carries HasValue=false unless the flux converts it with toFloat().
+//   - window(every:, location:) |> reduce(identity: {sum:, count:}, …) —
+//     BuildFieldSumCountFlux. One row per window with a reading, carrying
+//     Sum and Count from the same readings. HasSumCount is set only when the
+//     identity and the increments are FLOAT literals (an integer column decodes
+//     as nothing in the client), and the row is stamped at the window start
+//     only when the flux duplicates _start into _time (otherwise it has no
+//     _time, and the client reads the zero time).
+//
+// Either shape on a local sub-day window is refused (see gaugeSimWindowing).
 func (g *GaugeSim) Answer(flux string) ([]Row, error) {
 	if !strings.Contains(flux, fmt.Sprintf("r._field == %q", g.field)) {
 		return nil, nil // not this sim's field
-	}
-	if !strings.Contains(flux, "aggregateWindow") {
-		return nil, fmt.Errorf("influx: GaugeSim: only aggregateWindow queries are modelled:\n%s", flux)
 	}
 	rm := simRangeRe.FindStringSubmatch(flux)
 	if rm == nil {
@@ -144,21 +156,23 @@ func (g *GaugeSim) Answer(flux string) ([]Row, error) {
 	if err != nil {
 		return nil, fmt.Errorf("influx: GaugeSim: range stop: %w", err)
 	}
+
+	var emit func(row Row, vals []float64) (Row, bool)
+	switch {
+	case strings.Contains(flux, "aggregateWindow("):
+		if emit, err = gaugeSimAggregate(flux); err != nil {
+			return nil, err
+		}
+	case strings.Contains(flux, "|> reduce("):
+		if emit, err = gaugeSimSumCount(flux); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("influx: GaugeSim: only aggregateWindow and window|>reduce queries are modelled:\n%s", flux)
+	}
 	every, loc, err := gaugeSimWindowing(flux)
 	if err != nil {
 		return nil, err
-	}
-	fm := simFnRe.FindStringSubmatch(flux)
-	if fm == nil {
-		return nil, fmt.Errorf("influx: GaugeSim: aggregateWindow with no fn: in flux:\n%s", flux)
-	}
-	agg, ok := gaugeSimFns[fm[1]]
-	if !ok {
-		return nil, fmt.Errorf("influx: GaugeSim: unsupported fn %q", fm[1])
-	}
-	createEmpty := false
-	if cm := simCreateEmptyRe.FindStringSubmatch(flux); cm != nil {
-		createEmpty = cm[1] == "true"
 	}
 
 	var rows []Row
@@ -180,12 +194,7 @@ func (g *GaugeSim) Answer(flux string) ([]Row, error) {
 				whi = stop
 			}
 			if whi.After(wlo) {
-				vals := s.in(wlo, whi)
-				row := Row{DeviceID: id, Field: g.field, Time: wlo}
-				if v, ok := agg(vals); ok {
-					row.Value, row.HasValue = v, true
-					rows = append(rows, row)
-				} else if createEmpty {
+				if row, ok := emit(Row{DeviceID: id, Field: g.field, Time: wlo}, s.in(wlo, whi)); ok {
 					rows = append(rows, row)
 				}
 			}
@@ -193,6 +202,69 @@ func (g *GaugeSim) Answer(flux string) ([]Row, error) {
 		}
 	}
 	return rows, nil
+}
+
+// gaugeSimAggregate returns the per-window row builder for an aggregateWindow
+// query: fn over the window's readings, an empty window kept only with
+// createEmpty: true, and a count left undecodable unless converted.
+func gaugeSimAggregate(flux string) (func(Row, []float64) (Row, bool), error) {
+	fm := simFnRe.FindStringSubmatch(flux)
+	if fm == nil {
+		return nil, fmt.Errorf("influx: GaugeSim: aggregateWindow with no fn: in flux:\n%s", flux)
+	}
+	agg, ok := gaugeSimFns[fm[1]]
+	if !ok {
+		return nil, fmt.Errorf("influx: GaugeSim: unsupported fn %q", fm[1])
+	}
+	createEmpty := false
+	if cm := simCreateEmptyRe.FindStringSubmatch(flux); cm != nil {
+		createEmpty = cm[1] == "true"
+	}
+	// Flux's count is an integer; the client decodes float64 only.
+	decodable := fm[1] != "count" || strings.Contains(flux, "|> toFloat()")
+	return func(row Row, vals []float64) (Row, bool) {
+		v, ok := agg(vals)
+		if !ok {
+			return row, createEmpty
+		}
+		row.Value, row.HasValue = v, decodable
+		return row, true
+	}, nil
+}
+
+var (
+	simWindowCallRe = regexp.MustCompile(`\|> window\(every: \w+[^)]*\)`)
+	simReduceRe     = regexp.MustCompile(`reduce\(identity: \{sum: ([0-9.]+), count: ([0-9.]+)\}, ` +
+		`fn: \(r, accumulator\) => \(\{sum: accumulator\.sum \+ (?:float\(v: r\._value\)|r\._value), ` +
+		`count: accumulator\.count \+ ([0-9.]+)\}\)\)`)
+)
+
+// gaugeSimSumCount returns the per-window row builder for the window|>reduce
+// sum+count shape, reading its literals from the flux.
+func gaugeSimSumCount(flux string) (func(Row, []float64) (Row, bool), error) {
+	m := simReduceRe.FindStringSubmatch(flux)
+	if m == nil {
+		return nil, fmt.Errorf("influx: GaugeSim: unmodelled reduce() in flux:\n%s", flux)
+	}
+	isFloat := func(lit string) bool { return strings.Contains(lit, ".") }
+	sumIdentity, countIdentity, countStep := m[1], m[2], m[3]
+	decodable := isFloat(sumIdentity) && isFloat(countIdentity) && isFloat(countStep)
+	stamped := strings.Contains(flux, `|> duplicate(column: "_start", as: "_time")`)
+	createEmpty := strings.Contains(simWindowCallRe.FindString(flux), "createEmpty: true")
+	return func(row Row, vals []float64) (Row, bool) {
+		if len(vals) == 0 && !createEmpty {
+			return row, false // window() creates no empty windows by default
+		}
+		if !stamped {
+			row.Time = time.Time{}
+		}
+		sum := 0.0
+		for _, v := range vals {
+			sum += v
+		}
+		row.Sum, row.Count, row.HasSumCount = sum, float64(len(vals)), decodable
+		return row, true
+	}, nil
 }
 
 // simDuration parses a Flux duration literal of the shapes the builders emit

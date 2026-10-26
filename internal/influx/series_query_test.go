@@ -76,20 +76,43 @@ func TestBuildFieldSeriesFlux_WindowLocation(t *testing.T) {
 	}
 }
 
-// TestBuildFieldSeriesFlux_CountIsFloat: the 6h mean is folded from hourly sum
-// and count (issue #36). Flux's count yields an integer _value, which the client
-// decodes as no value at all (it reads float64 only), so the builder must
-// convert it — otherwise every folded mean would read as a gap.
-func TestBuildFieldSeriesFlux_CountIsFloat(t *testing.T) {
-	flux := BuildFieldSeriesFlux("statehouse", []string{"d"}, "temperature_c", "count", seriesStart, seriesStop, "1h", "Europe/London")
-	if !strings.Contains(flux, "fn: count,") || !strings.HasSuffix(strings.TrimSpace(flux), "|> toFloat()") {
-		t.Errorf("count series must end in toFloat()\n%s", flux)
-	}
-	for _, fn := range []string{"mean", "min", "max", "last", "sum"} {
-		flux := BuildFieldSeriesFlux("statehouse", []string{"d"}, "temperature_c", fn, seriesStart, seriesStop, "1h", "Europe/London")
-		if strings.Contains(flux, "toFloat") {
-			t.Errorf("%s: only count needs converting\n%s", fn, flux)
+// TestBuildFieldSumCountFlux pins the single-pass shape the 6h mean fold reads
+// (PR #37 review): sum and count from ONE reduce() over ONE read, as floats,
+// stamped at the window start, on the UTC grid for a sub-day interval.
+func TestBuildFieldSumCountFlux(t *testing.T) {
+	flux := BuildFieldSumCountFlux("statehouse", []string{"a", "b"}, "temperature_c", seriesStart, seriesStop, "1h", "Europe/London")
+	for _, w := range []string{
+		`r._field == "temperature_c"`,
+		`contains(value: r.device_id, set: ["a", "b"])`,
+		`start: 2026-06-11T00:00:00Z`,
+		`|> window(every: 1h, location: timezone.utc)`,
+		`reduce(identity: {sum: 0.0, count: 0.0}`,
+		`count: accumulator.count + 1.0`,
+		`|> duplicate(column: "_start", as: "_time")`,
+		`|> window(every: inf)`,
+	} {
+		if !strings.Contains(flux, w) {
+			t.Errorf("sum/count flux missing %q\n%s", w, flux)
 		}
+	}
+	if n := strings.Count(flux, "from(bucket:"); n != 1 {
+		t.Errorf("sum and count must come from one read; %d from() calls\n%s", n, flux)
+	}
+	if strings.Contains(flux, "aggregateWindow") || strings.Contains(flux, "union(") {
+		t.Errorf("sum and count must come from one reduce(), not two aggregates\n%s", flux)
+	}
+	if strings.Contains(flux, "timezone.location(") {
+		t.Errorf("a sub-day sum/count must not window on local time\n%s", flux)
+	}
+
+	// The sim answers the builder's own flux with decodable sum+count rows.
+	at := []time.Time{seriesStart.Add(time.Minute), seriesStart.Add(2 * time.Minute)}
+	rows, err := NewGaugeSim("temperature_c").AddSamples("a", at, []float64{3, 5}).Answer(flux)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || !rows[0].HasSumCount || rows[0].Sum != 8 || rows[0].Count != 2 || !rows[0].Time.Equal(seriesStart) {
+		t.Errorf("rows = %+v, want one decodable row sum 8 count 2 at %s", rows, seriesStart)
 	}
 }
 

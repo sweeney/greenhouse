@@ -54,19 +54,8 @@ func windowLocation(interval, tz string) string {
 	return "timezone.utc"
 }
 
-// FnSum and FnCount are the two per-bucket aggregates climate folds a coarse
-// MEAN from (issue #36): a 6h mean is Σsum/Σcount over the bucket's hours,
-// which is exactly the sample mean Influx would give for the whole window. They
-// are internal building blocks, never a caller-selectable fn — a sum of
-// temperatures is not a climate answer, only the numerator of one.
-const (
-	FnSum   = "sum"
-	FnCount = "count"
-)
-
 // BuildFieldSeriesFlux builds the per-bucket climate series for ONE field over a
-// SET of devices, aggregated with fn (mean/min/max/last, or the FnSum/FnCount
-// fold parts). It is the heart of greenhouse: a plain gauge query over the
+// SET of devices, aggregated with fn (mean/min/max/last). It is the heart of greenhouse: a plain gauge query over the
 // device_environment measurement with no counter/integral/reset handling
 // (climate fields are not cumulative).
 //
@@ -77,8 +66,6 @@ const (
 //     location: <windowLocation>, createEmpty: true) collapses each bucket to
 //     its aggregate — on the UTC grid for a sub-day interval, on local calendar
 //     days for 1d (issue #36) — emitting empty buckets so the axis is dense.
-//   - fn: count yields an INTEGER _value, which the client decodes as no value
-//     (it reads float64 only), so it is converted with toFloat().
 //
 // timeSrc:"_start" is REQUIRED: Influx's aggregateWindow stamps the right edge
 // (_stop) by default, which shifts every value one bucket late relative to the
@@ -93,7 +80,7 @@ const (
 // history, which is a config change, not a change to this query. Harmless while one
 // site writes to the bucket; must land before a second one does.
 func BuildFieldSeriesFlux(bucket string, deviceIDs []string, field, fn string, start, stop time.Time, interval, tz string) string {
-	flux := fmt.Sprintf(`import "timezone"
+	return fmt.Sprintf(`import "timezone"
 
 from(bucket: %q)
   |> range(start: %s, stop: %s)
@@ -109,10 +96,50 @@ from(bucket: %q)
 		fn,
 		windowLocation(interval, tz),
 	)
-	if fn == FnCount {
-		flux += "\n  |> toFloat()"
-	}
-	return flux
+}
+
+// BuildFieldSumCountFlux builds, per window, the SUM and the COUNT of one
+// field's readings over a set of devices, in ONE pass over the data (issue #36,
+// PR #37 review). climate folds a 6h mean as Σsum/Σcount over its hours.
+//
+// The two numbers must describe the same readings. Fetched as two queries, a
+// reading statehouse writes between them (rolling windows end at "now") is
+// counted in one and missing from the other, and the open bucket — the one a
+// dashboard is watching — reads low: 10 °C when every reading was 20 °C. One
+// reduce() produces both from one read, so they cannot disagree.
+//
+//   - window(every:, location:) lays the same grid aggregateWindow would (see
+//     windowLocation; the fold only ever asks for 1h, on UTC). Window bounds
+//     are truncated to the range, so an off-grid start stamps the first row at
+//     the range start, as with aggregateWindow.
+//   - reduce() accumulates sum and count as FLOATS (0.0 / 1.0): a Flux integer
+//     decodes as no value in the client, which would turn every mean into a gap.
+//     float(v:) guards against a field ever written as an integer.
+//   - duplicate(_start → _time) stamps each row at its window's LEFT edge (the
+//     timeSrc:"_start" convention), and window(every: inf) undoes the
+//     windowing so each device's rows come back as one table.
+//
+// A window with no reading yields no row (window() does not create empty
+// windows by default); the fold treats an absent hour as contributing nothing.
+func BuildFieldSumCountFlux(bucket string, deviceIDs []string, field string, start, stop time.Time, interval, tz string) string {
+	return fmt.Sprintf(`import "timezone"
+
+from(bucket: %q)
+  |> range(start: %s, stop: %s)
+  |> filter(fn: (r) => r._measurement == "device_environment" and r._field == %q)
+  |> filter(fn: (r) => contains(value: r.device_id, set: %s))
+  |> window(every: %s, location: %s)
+  |> reduce(identity: {sum: 0.0, count: 0.0}, fn: (r, accumulator) => ({sum: accumulator.sum + float(v: r._value), count: accumulator.count + 1.0}))
+  |> duplicate(column: "_start", as: "_time")
+  |> window(every: inf)`,
+		bucket,
+		fluxTime(start),
+		fluxTime(stop),
+		field,
+		deviceSet(deviceIDs),
+		interval,
+		windowLocation(interval, tz),
+	)
 }
 
 // DefaultLatestLookback bounds how far GET /devices/{id}/latest looks back for a

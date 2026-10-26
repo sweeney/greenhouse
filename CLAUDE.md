@@ -26,7 +26,8 @@ shapes, the Influx Querier + fake, the Server/auth/CORS/spec skeleton, the confi
   location-aware `aggregateWindow` stretches a sub-day window across the autumn repeated
   hour, so every sensor read null for it (#36). `6h` is queried at `1h` and folded onto a
   local 00/06/12/18 axis. `mean` folds as Σsum/Σcount, never as a mean of hourly means,
-  because report-on-change sensors make hours unequal. Config refuses a zone whose offset
+  because report-on-change sensors make hours unequal. Sum and count come from ONE
+  `reduce()` pass: two queries can disagree about the newest readings. Config refuses a zone whose offset
   isn't always whole hours. Test against `influx.GaugeSim`: it reads the grid from the flux
   and refuses local sub-day windows. A harness that ignores the flux shares the bug.
 - **No energy concepts.** No cost, tariff, bill, counter/integral, or on/off events. Those belong to

@@ -36,6 +36,13 @@ type Row struct {
 	// with the decoded record.
 	Text string
 	Time time.Time
+
+	// Sum and Count are a window's reading total and reading count, from the
+	// single-pass reduce() of BuildFieldSumCountFlux (the 6h mean fold, issue
+	// #36). HasSumCount is set only when the record carries BOTH as float64
+	// columns: Flux integers decode as nothing here, exactly as for _value.
+	Sum, Count  float64
+	HasSumCount bool
 }
 
 // Querier is the minimal subset of Influx querying that greenhouse needs.

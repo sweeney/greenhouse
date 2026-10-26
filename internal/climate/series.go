@@ -731,8 +731,8 @@ func environmentalIDs(devices map[string]config.DeviceConfig) []string {
 // BuildSeries is the orchestrator: it queries the field series across the
 // environmental device set, demuxes the bucketed rows onto the canonical axis,
 // and calls AssembleSeries. The query count is independent of device count: the
-// builder fans out across the device set via contains(set). It is ONE query,
-// except a wall-clock mean, which is two (see foldWallClock).
+// builder fans out across the device set via contains(set). It is always ONE
+// query, a wall-clock (6h) interval included (see foldWallClock).
 //
 // bucket is the Influx bucket name; win the resolved window; iv the resolved
 // interval; field+fn the measurement to chart; groupBy the grouping mode;
@@ -829,8 +829,11 @@ func querySeries(ctx context.Context, q influx.Querier, bucket string, ids []str
 //   - mean: NOT a mean of hourly means. Sensors report on change, so an hour
 //     can hold 60 readings or 3, and averaging hourly means would weight the
 //     sparse hour like the dense one. The readings are queried as hourly SUM
-//     and COUNT instead (a second query) and folded as Σsum / Σcount, which is
-//     exactly the sample mean of the 6h window.
+//     and COUNT instead and folded as Σsum / Σcount, which is exactly the
+//     sample mean of the 6h window. Both come from ONE reduce() over one read
+//     (influx.BuildFieldSumCountFlux): fetched as two queries, a reading
+//     written between them was counted but not summed, and the open bucket
+//     read 10 °C when every reading was 20 °C (PR #37 review).
 //
 // A display bucket with no reading in any of its hours stays NaN (a gap). The
 // cross-member group_fn runs after this, in AssembleSeries, exactly as for any
@@ -848,14 +851,23 @@ func foldWallClock(ctx context.Context, q influx.Querier, bucket string, ids []s
 	out := map[string][]float64{}
 	switch fn {
 	case "mean":
-		sums, err := querySeries(ctx, q, bucket, ids, field, influx.FnSum, win, fine.Token, tz, fineBuckets)
+		flux := influx.BuildFieldSumCountFlux(bucket, ids, field, win.Start, win.Stop, fine.Token, tz)
+		rows, err := q.Query(ctx, flux)
 		if err != nil {
 			return nil, err
 		}
-		counts, err := querySeries(ctx, q, bucket, ids, field, influx.FnCount, win, fine.Token, tz, fineBuckets)
-		if err != nil {
-			return nil, err
+		// Sum and count arrive on the SAME row, so they always describe the same
+		// readings; split them only to reuse the demux.
+		var sumRows, countRows []influx.Row
+		for _, r := range rows {
+			s := influx.Row{DeviceID: r.DeviceID, Time: r.Time, Value: r.Sum, HasValue: r.HasSumCount}
+			c := influx.Row{DeviceID: r.DeviceID, Time: r.Time, Value: r.Count, HasValue: r.HasSumCount}
+			sumRows, countRows = append(sumRows, s), append(countRows, c)
 		}
+		idx := bucketIndex(fineBuckets)
+		sums, counts := map[string][]float64{}, map[string][]float64{}
+		demux(sumRows, idx, sums, len(fineBuckets))
+		demux(countRows, idx, counts, len(fineBuckets))
 		for id, sum := range sums {
 			out[id] = foldMean(sum, counts[id], into, n)
 		}

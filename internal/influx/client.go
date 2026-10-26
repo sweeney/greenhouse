@@ -74,6 +74,11 @@ func (c *Client) Query(ctx context.Context, flux string) ([]Row, error) {
 		case string:
 			row.Text = v
 		}
+		sum, sok := rec.ValueByKey("sum").(float64)
+		count, cok := rec.ValueByKey("count").(float64)
+		if sok && cok {
+			row.Sum, row.Count, row.HasSumCount = sum, count, true
+		}
 		rows = append(rows, row)
 	}
 	if err := res.Err(); err != nil {

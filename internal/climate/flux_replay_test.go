@@ -128,10 +128,15 @@ func assertBucketsCarryTheirOwnSpan(t *testing.T, label string, resp SeriesRespo
 			t.Errorf("%s: bucket %d (%s) is a gap, want %v", label, i, b, want)
 			continue
 		}
-		// Against the exact mean, within rounding: a 6h mean is folded from
-		// hourly sums and counts (issue #36), which can differ from a direct
-		// mean in the last bit and so round the other way at a .xx5 boundary.
-		if math.Abs(got[i]-exact) > 0.005+1e-9 {
+		// Strict where nothing is folded. A 6h mean is folded from hourly sums
+		// and counts (issue #36), which can differ from a direct mean in the
+		// last bit and so round the other way at a .xx5 boundary, so only it is
+		// compared against the exact mean, within rounding.
+		diff, tol := math.Abs(got[i]-want), 1e-9
+		if iv.wallClock() {
+			diff, tol = math.Abs(got[i]-exact), 0.005+1e-9
+		}
+		if diff > tol {
 			// Name the failure mode explicitly when the value is the NEXT
 			// bucket's — that is the exact signature reported in issue #18.
 			next := roundTo(meanOver(samples, b.Add(iv.Duration), b.Add(2*iv.Duration)), valueDP)

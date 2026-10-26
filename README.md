@@ -148,9 +148,16 @@ Influx's own aggregate over the whole 6h window would have been:
 - `last` takes the latest hour that has a reading;
 - `mean` is **not** a mean of hourly means. Sensors report on change, so one hour
   can hold 60 readings and the next 3, and averaging hourly means would weight
-  them alike. Greenhouse queries hourly `sum` and `count` instead and divides the
-  totals, which is the sample mean of the 6h window. That costs a second Influx
-  query, and only for `fn=mean&interval=6h`.
+  them alike. Greenhouse reads hourly `sum` and `count` instead and divides the
+  totals, which is the sample mean of the 6h window. Both come from **one**
+  `reduce()` over one read, so they always describe the same readings: as two
+  queries, a reading written between them was counted but not summed, and the
+  newest bucket read low.
+
+Cost: `6h` reads Influx at `1h`, so it returns up to 6× the rows the old 6h
+query did (168 rows per device for the default `7d` chart instead of 28). It is
+still one query per request. The ~2500-bucket cap applies to the 6h display axis,
+not to the hourly rows behind it.
 
 `group_fn` still runs after `fn`, across a group's members, on the folded values.
 

@@ -63,32 +63,43 @@ func rampingReplay(s *Server, deviceID, spec string) func(string) ([]influx.Row,
 }
 
 var (
-	replayEveryRe = regexp.MustCompile(`every: (\w+),`)
-	replayFnRe    = regexp.MustCompile(`aggregateWindow\(every: \w+, fn: (\w+),`)
+	replayEveryRe  = regexp.MustCompile(`every: (\w+),`)
+	replayFnRe     = regexp.MustCompile(`aggregateWindow\(every: \w+, fn: (\w+),`)
+	replayUTCRe    = regexp.MustCompile(`location: timezone\.utc[,)]`)
+	replaySumCount = `|> window(every: 1h, location: timezone.utc)
+  |> reduce(identity: {sum: 0.0, count: 0.0}, fn: (r, accumulator) => ({sum: accumulator.sum + float(v: r._value), count: accumulator.count + 1.0}))
+  |> duplicate(column: "_start", as: "_time")`
 )
 
-// replayGridRows produces the aggregateWindow rows for [win.Start, win.Stop) at
-// the flux's every: on the UTC grid. The ramp is modelled as continuous: a
+// replayGridRows produces the rows for [win.Start, win.Stop) at the flux's
+// every: on the UTC grid, for the two shapes greenhouse sends: a mean
+// aggregateWindow, and the single-pass window|>reduce sum+count the 6h mean is
+// folded from (issue #36, PR #37 review). The ramp is modelled as continuous: a
 // window's mean is the temperature at its midpoint, its count is its length in
 // minutes (one reading a minute) and its sum is mean × count. That makes the
-// hourly sum/count a 6h mean is folded from (issue #36) fold back to exactly
-// the 6h window's midpoint, as it would for a real linear ramp.
+// hourly sum/count fold back to exactly the 6h window's midpoint, as it would
+// for a real linear ramp. Any other shape is refused, so a builder change
+// cannot be answered with what the caller meant rather than what it sent.
 //
 // It used to step the interval token from local midnight whatever the flux
 // asked for, so it answered a 1h fold query with 6h rows; it now refuses a
 // sub-day window on local time, the shape Influx stretches across a clock
 // change (see influx.GaugeSim).
 func replayGridRows(deviceID string, win climate.Window, flux string) ([]influx.Row, error) {
-	em, fm := replayEveryRe.FindStringSubmatch(flux), replayFnRe.FindStringSubmatch(flux)
-	if em == nil || fm == nil {
-		return nil, fmt.Errorf("replay: no aggregateWindow every:/fn: in flux:\n%s", flux)
+	em := replayEveryRe.FindStringSubmatch(flux)
+	if em == nil {
+		return nil, fmt.Errorf("replay: no every: in flux:\n%s", flux)
 	}
 	step, err := time.ParseDuration(em[1])
 	if err != nil {
 		return nil, err
 	}
-	if !strings.Contains(flux, "location: timezone.utc,") {
+	if !replayUTCRe.MatchString(flux) {
 		return nil, fmt.Errorf("replay: only sub-day windows on timezone.utc are modelled:\n%s", flux)
+	}
+	sumCount := strings.Contains(flux, replaySumCount)
+	if fm := replayFnRe.FindStringSubmatch(flux); !sumCount && (fm == nil || fm[1] != "mean") {
+		return nil, fmt.Errorf("replay: only a mean aggregateWindow or the sum/count reduce is modelled:\n%s", flux)
 	}
 
 	var rows []influx.Row
@@ -102,24 +113,14 @@ func replayGridRows(deviceID string, win climate.Window, flux string) ([]influx.
 		}
 		mid := lo.Add(hi.Sub(lo) / 2)
 		mean := 10 + mid.Sub(win.Start).Hours()
-		minutes := hi.Sub(lo).Minutes()
-		var v float64
-		switch fm[1] {
-		case "mean":
-			v = mean
-		case influx.FnCount:
-			v = minutes
-		case influx.FnSum:
-			v = mean * minutes
-		default:
-			return nil, fmt.Errorf("replay: fn %q not modelled", fm[1])
+		row := influx.Row{DeviceID: deviceID, Time: lo} // left edge
+		if sumCount {
+			minutes := hi.Sub(lo).Minutes()
+			row.Sum, row.Count, row.HasSumCount = mean*minutes, minutes, true
+		} else {
+			row.Value, row.HasValue = mean, true
 		}
-		rows = append(rows, influx.Row{
-			DeviceID: deviceID,
-			Time:     lo, // timeSrc: "_start"
-			Value:    v,
-			HasValue: true,
-		})
+		rows = append(rows, row)
 	}
 	return rows, nil
 }
@@ -234,7 +235,14 @@ func TestSeriesHTTP_RollingWindowValuesMatchTheirLabel(t *testing.T) {
 					t.Errorf("bucket %d (%s) is null, want %v", i, b, climate.RoundValue(exact))
 					continue
 				}
-				if math.Abs(*got-exact) > 0.005+1e-9 {
+				// Strict where nothing is folded; within rounding for the 6h
+				// fold, whose Σsum/Σcount can differ from a direct mean in the
+				// last bit and round the other way at a .xx5 boundary.
+				diff, tol := math.Abs(*got-climate.RoundValue(exact)), 1e-9
+				if tc.interval == "6h" {
+					diff, tol = math.Abs(*got-exact), 0.005+1e-9
+				}
+				if diff > tol {
 					t.Errorf("bucket %d (%s) = %v, want %v (value must describe the span it is labelled with)",
 						i, b, *got, climate.RoundValue(exact))
 				}
