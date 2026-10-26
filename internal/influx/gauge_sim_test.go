@@ -151,3 +151,28 @@ func TestGaugeSim_Aggregates(t *testing.T) {
 		t.Errorf("another field must return no rows, got %+v", rows)
 	}
 }
+
+// TestGaugeSim_CountIsAnIntegerUnlessConverted (PR #37 review): Flux's count is
+// an integer, and the client decodes float64 only, so an unconverted count
+// arrives with no value. The sim must answer what the flux says, not what the
+// caller meant, or dropping the conversion passes every end-to-end test.
+func TestGaugeSim_CountIsAnIntegerUnlessConverted(t *testing.T) {
+	start := time.Date(2026, 8, 18, 10, 0, 0, 0, time.UTC)
+	stop := start.Add(time.Hour)
+	sim := NewGaugeSim("temperature_c").AddSamples("d", []time.Time{start}, []float64{4})
+
+	rows, err := sim.Answer(simFlux("d", "count", "1h", "timezone.utc", start, stop, false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || rows[0].HasValue {
+		t.Errorf("unconverted count: rows = %+v, want one row with no decodable value", rows)
+	}
+	rows, err = sim.Answer(simFlux("d", "count", "1h", "timezone.utc", start, stop, false) + "\n  |> toFloat()")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || !rows[0].HasValue || rows[0].Value != 1 {
+		t.Errorf("converted count: rows = %+v, want one row of 1", rows)
+	}
+}
