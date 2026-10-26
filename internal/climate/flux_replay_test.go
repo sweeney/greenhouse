@@ -16,15 +16,20 @@ import (
 // replaying what InfluxDB actually returns for the query greenhouse builds and
 // asserting each bucket's value belongs to the span its label claims.
 //
-// The harness models aggregateWindow(every:, fn:, timeSrc:"_start", location:,
-// createEmpty: true) faithfully in the two respects that caused the bug:
+// The harness is an influx.GaugeSim, which answers the flux BuildSeries actually
+// sends, windowing the readings on the grid that flux asks for, in the two
+// respects that caused the bug:
 //
-//  1. Windows are anchored to LOCAL MIDNIGHT in the configured location, NOT to
-//     the query's range start. So a range starting 11:05 still yields boundaries
-//     at 11:00, 12:00, 13:00, …
+//  1. Windows sit on the GRID, not on the query's range start. So a range
+//     starting 11:05 still yields boundaries at 11:00, 12:00, 13:00, …
 //  2. The first window is TRUNCATED to range start, so its `_start` stamp is the
 //     range start itself, not the grid boundary. That extra row is why 25 rows
 //     used to arrive for a 24-slot axis.
+//
+// It used to be a hand-rolled replay that ignored the flux and stepped a fixed
+// duration from local midnight — the very grid the Go axis assumed — so it
+// could not see issue #36, where the query's grid and the axis disagreed only
+// across a clock change. Reading the grid from the flux is what lets it.
 
 // sample is one underlying sensor reading.
 type sample struct {
@@ -59,30 +64,24 @@ func meanOver(samples []sample, lo, hi time.Time) float64 {
 	return sum / float64(n)
 }
 
-// replayAggregateWindow returns the rows Influx would produce for a mean
-// aggregateWindow over [start, stop) at iv, on the local-midnight-anchored grid.
-func replayAggregateWindow(deviceID string, samples []sample, start, stop time.Time, iv Interval, loc *time.Location) []influx.Row {
-	var rows []influx.Row
-	// Walk the grid from the local midnight of the range start's date. That is
-	// the anchor Flux's location-aware windowing uses.
-	for edge := localMidnight(start, loc); edge.Before(stop); edge = edge.Add(iv.Duration) {
-		lo, hi := edge, edge.Add(iv.Duration)
-		if !hi.After(start) {
-			continue // window entirely before the range
-		}
-		if lo.Before(start) {
-			lo = start // Flux truncates the first window to range start
-		}
-		if hi.After(stop) {
-			hi = stop
-		}
-		v := meanOver(samples, lo, hi)
-		r := influx.Row{DeviceID: deviceID, Time: lo} // timeSrc: "_start"
-		if !math.IsNaN(v) {
-			r.Value = v
-			r.HasValue = true
-		}
-		rows = append(rows, r)
+// gaugeSimOf loads samples into a GaugeSim for one device's temperature_c.
+func gaugeSimOf(deviceID string, samples []sample) *influx.GaugeSim {
+	at := make([]time.Time, len(samples))
+	v := make([]float64, len(samples))
+	for i, s := range samples {
+		at[i], v[i] = s.At, s.V
+	}
+	return influx.NewGaugeSim("temperature_c").AddSamples(deviceID, at, v)
+}
+
+// replayAggregateWindow returns the rows Influx produces for the mean field
+// series greenhouse builds over win at iv.
+func replayAggregateWindow(t *testing.T, deviceID string, samples []sample, win Window, iv Interval, loc *time.Location) []influx.Row {
+	t.Helper()
+	flux := influx.BuildFieldSeriesFlux("statehouse", []string{deviceID}, "temperature_c", "mean", win.Start, win.Stop, iv.Token, loc.String())
+	rows, err := gaugeSimOf(deviceID, samples).Answer(flux)
+	if err != nil {
+		t.Fatalf("replay: %v", err)
 	}
 	return rows
 }
@@ -101,16 +100,23 @@ func assertBucketsCarryTheirOwnSpan(t *testing.T, label string, resp SeriesRespo
 		t.Fatalf("%s: %d values for %d buckets", label, len(got), len(resp.Buckets))
 	}
 
+	// The query's range() bounds are rendered to whole seconds (influx.fluxTime),
+	// so a reading in the sub-second slice before a nanosecond-precision "now"
+	// is outside the range. The GaugeSim honours the rendered bounds, as Influx
+	// does, so the expectation clips to them too.
+	start, stop := win.Start.Truncate(time.Second), win.Stop.Truncate(time.Second)
+
 	shifted := 0
 	for i, b := range resp.Buckets {
 		lo, hi := b, b.Add(iv.Duration)
-		if lo.Before(win.Start) {
-			lo = win.Start
+		if lo.Before(start) {
+			lo = start
 		}
-		if hi.After(win.Stop) {
-			hi = win.Stop
+		if hi.After(stop) {
+			hi = stop
 		}
-		want := roundTo(meanOver(samples, lo, hi), valueDP)
+		exact := meanOver(samples, lo, hi)
+		want := roundTo(exact, valueDP)
 
 		if math.IsNaN(want) {
 			if !math.IsNaN(got[i]) {
@@ -122,7 +128,15 @@ func assertBucketsCarryTheirOwnSpan(t *testing.T, label string, resp SeriesRespo
 			t.Errorf("%s: bucket %d (%s) is a gap, want %v", label, i, b, want)
 			continue
 		}
-		if math.Abs(got[i]-want) > 1e-9 {
+		// Strict where nothing is folded. A 6h mean is folded from hourly sums
+		// and counts (issue #36), which can differ from a direct mean in the
+		// last bit and so round the other way at a .xx5 boundary, so only it is
+		// compared against the exact mean, within rounding.
+		diff, tol := math.Abs(got[i]-want), 1e-9
+		if iv.wallClock() {
+			diff, tol = math.Abs(got[i]-exact), 0.005+1e-9
+		}
+		if diff > tol {
 			// Name the failure mode explicitly when the value is the NEXT
 			// bucket's — that is the exact signature reported in issue #18.
 			next := roundTo(meanOver(samples, b.Add(iv.Duration), b.Add(2*iv.Duration)), valueDP)
@@ -149,12 +163,7 @@ func buildReplayed(t *testing.T, win Window, iv Interval, loc *time.Location) (S
 		dev: {Class: "environmental_sensor", Location: "area-a", DisplayName: "Sensor A"},
 	}
 	samples := rampSamples(win.Start, win.Stop)
-	q := &influx.FakeQuerier{
-		PingOK: true,
-		QueryFunc: func(string) ([]influx.Row, error) {
-			return replayAggregateWindow(dev, samples, win.Start, win.Stop, iv, loc), nil
-		},
-	}
+	q := &influx.FakeQuerier{PingOK: true, QueryFunc: gaugeSimOf(dev, samples).Answer}
 	resp, err := BuildSeries(context.Background(), q, "statehouse", win, iv, "temperature_c", "mean", GroupByDevice, DefaultGroupFn, devices, nil, loc)
 	if err != nil {
 		t.Fatalf("BuildSeries: %v", err)
@@ -242,7 +251,7 @@ func TestBuildSeries_OffGridFirstPartialWindowSurvives(t *testing.T) {
 	iv := mustInterval(t, "1h")
 
 	samples := rampSamples(win.Start, win.Stop)
-	rows := replayAggregateWindow("d", samples, win.Start, win.Stop, iv, loc)
+	rows := replayAggregateWindow(t, "d", samples, win, iv, loc)
 	if len(rows) != 25 {
 		t.Fatalf("replay produced %d rows, want 25 (24 full hours plus the truncated first window)", len(rows))
 	}
@@ -310,12 +319,7 @@ func TestBuildSeries_HeatingRampLandsInTheRightHour(t *testing.T) {
 
 	const dev = "sensor_a"
 	devices := map[string]config.DeviceConfig{dev: {Class: "environmental_sensor", DisplayName: "Sensor A"}}
-	q := &influx.FakeQuerier{
-		PingOK: true,
-		QueryFunc: func(string) ([]influx.Row, error) {
-			return replayAggregateWindow(dev, samples, win.Start, win.Stop, iv, loc), nil
-		},
-	}
+	q := &influx.FakeQuerier{PingOK: true, QueryFunc: gaugeSimOf(dev, samples).Answer}
 	resp, err := BuildSeries(context.Background(), q, "statehouse", win, iv, "temperature_c", "mean", GroupByDevice, DefaultGroupFn, devices, nil, loc)
 	if err != nil {
 		t.Fatalf("BuildSeries: %v", err)

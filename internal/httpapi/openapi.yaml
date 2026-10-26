@@ -118,9 +118,11 @@ paths:
         selects the per-bucket aggregation (mean default, min, max, last). The
         shape param chooses columnar (default) or row-oriented output. Empty
         buckets are null (no reading), not zero. Bucket starts are snapped to
-        the local-midnight interval grid, so the first bucket of an off-grid
-        window (any "<N>h" window, or a non-grid-aligned custom from) begins
-        slightly before `from`.
+        the interval's grid (the UTC grid at 5m-1h, local 00/06/12/18 at 6h,
+        local midnight at 1d), so the first bucket of an off-grid window (any
+        "<N>h" window, or a non-grid-aligned custom from) begins slightly before
+        `from`. Each grid holds across a clock change: see the interval
+        parameter.
       operationId: getSeries
       tags: [data]
       parameters:
@@ -391,6 +393,14 @@ components:
         week/month→1d, custom and rolling <N>d/<N>h→by span). An interval whose
         bucket count over the window exceeds the ~2500 cap returns 400 asking for
         a coarser interval (the cap admits 5m over a 7-day window, ~2016 buckets).
+        Each interval keeps its own grid across a clock change. 5m/15m/30m/1h
+        are a fixed step on the absolute (UTC) grid, so the Europe/London autumn
+        changeover day has 25 hourly buckets (both 01:00s) and the spring one
+        23. 6h is 00/06/12/18 local on both sides, so the bucket straddling a
+        change is 7h or 5h long; it is read from Influx at 1h and folded
+        (min/max of the hourly min/max, the latest hourly last, and for mean
+        the hourly sums over the hourly counts, i.e. the sample mean of the 6h
+        window). 1d is one local calendar day, 25h or 23h across a change.
       schema:
         type: string
         enum: [5m, 15m, 30m, 1h, 6h, 1d]
@@ -739,9 +749,10 @@ components:
             format: date-time
           description: >
             Local-timezone bucket-start axis every series aligns to. Bucket
-            starts are snapped onto the interval grid anchored at local midnight
-            (the same grid Influx aggregates on), so each value describes the
-            span its bucket is labelled with. For a window whose start is off
+            starts are snapped onto the grid the interval is aggregated on (the
+            UTC grid at 5m-1h, local 00/06/12/18 at 6h, local midnight at 1d; it
+            holds across a clock change), so each value describes the span its
+            bucket is labelled with, from that start to the next bucket's. For a window whose start is off
             that grid (any "<N>h" window, or a custom from that is not
             grid-aligned) the FIRST bucket start is therefore slightly earlier
             than `from`; that leading slice carries no in-window data.

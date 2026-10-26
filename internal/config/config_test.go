@@ -3,7 +3,9 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestDefault(t *testing.T) {
@@ -174,5 +176,65 @@ house:
 func TestLoadMissingFileErrors(t *testing.T) {
 	if _, err := Load(filepath.Join(t.TempDir(), "nope.yaml")); err == nil {
 		t.Fatal("Load: expected error for missing config file, got nil")
+	}
+}
+
+// TestLoadRefusesNonWholeHourTimezone (issue #36): /series windows every sub-day
+// interval on the UTC grid and folds 1h buckets onto local 6h boundaries. Both
+// are exact only when the zone's UTC offset is always a whole number of hours;
+// in a +05:30 zone every hourly label would sit at half past and every local 6h
+// boundary would fall mid-bucket. That must be refused at startup, not served.
+func TestLoadRefusesNonWholeHourTimezone(t *testing.T) {
+	for _, tz := range []string{
+		"Asia/Kolkata",        // +05:30
+		"Asia/Kathmandu",      // +05:45
+		"Australia/Adelaide",  // +09:30 / +10:30
+		"Australia/Lord_Howe", // +10:30 standard, 30-minute DST
+	} {
+		dir := t.TempDir()
+		p := writeFile(t, dir, "config.yaml", "house:\n  timezone: \""+tz+"\"\n")
+		_, err := Load(p)
+		if err == nil {
+			t.Errorf("%s: Load accepted a zone whose offset is not a whole number of hours", tz)
+			continue
+		}
+		if !strings.Contains(err.Error(), tz) || !strings.Contains(err.Error(), "whole number of hours") {
+			t.Errorf("%s: error should name the zone and the constraint, got: %v", tz, err)
+		}
+	}
+}
+
+// TestLoadAcceptsWholeHourTimezones: zones that are whole-hour for any span
+// with data are accepted — including ones that were not in the distant past
+// (Singapore was +07:30 until 1982, Caracas −04:30 until 2016) and ones whose
+// clocks change AT local midnight (America/Santiago, America/Havana), which the
+// series axes resolve to the transition instant.
+func TestLoadAcceptsWholeHourTimezones(t *testing.T) {
+	for _, tz := range []string{
+		"Europe/London", "UTC", "America/New_York", "Asia/Singapore",
+		"America/Caracas", "America/Santiago", "America/Havana",
+	} {
+		dir := t.TempDir()
+		p := writeFile(t, dir, "config.yaml", "house:\n  timezone: \""+tz+"\"\n")
+		if _, err := Load(p); err != nil {
+			t.Errorf("%s: unexpected error: %v", tz, err)
+		}
+	}
+}
+
+// TestCheckWholeHourZone_FixedZones exercises the check on synthetic zones, so
+// it does not depend on what a tzdata release says about any real place.
+func TestCheckWholeHourZone_FixedZones(t *testing.T) {
+	for _, c := range []struct {
+		off int
+		ok  bool
+	}{
+		{0, true}, {3600, true}, {-5 * 3600, true}, {14 * 3600, true},
+		{5*3600 + 1800, false}, {-(3*3600 + 1800), false}, {5*3600 + 45*60, false}, {-(44*60 + 30), false},
+	} {
+		err := checkWholeHourZone(time.FixedZone("Test", c.off))
+		if (err == nil) != c.ok {
+			t.Errorf("offset %+ds: err = %v, want ok=%v", c.off, err, c.ok)
+		}
 	}
 }

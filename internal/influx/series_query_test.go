@@ -34,7 +34,7 @@ func TestBuildFieldSeriesFlux(t *testing.T) {
 		`r._measurement == "device_environment"`,
 		`r._field == "temperature_c"`,
 		`contains(value: r.device_id, set: ["sensor_a", "outdoor_station"])`,
-		`aggregateWindow(every: 1h, fn: mean, timeSrc: "_start", location: timezone.location(name: "Europe/London"), createEmpty: true)`,
+		`aggregateWindow(every: 1h, fn: mean, timeSrc: "_start", location: timezone.utc, createEmpty: true)`,
 		// No pad for a gauge series: range starts AT the window start.
 		`start: 2026-06-11T00:00:00Z`,
 		`stop: 2026-06-12T00:00:00Z`,
@@ -50,6 +50,69 @@ func TestBuildFieldSeriesFlux(t *testing.T) {
 		if strings.Contains(flux, bad) {
 			t.Errorf("field series flux unexpectedly contains %q (energy concept)", bad)
 		}
+	}
+}
+
+// TestBuildFieldSeriesFlux_WindowLocation pins the grid each interval is
+// windowed on (issue #36). Influx lays a SUB-DAY window on a named location on
+// local wall clock and stretches the one straddling the autumn repeated hour
+// (at 15m, 01:45 BST ran to 02:00 GMT and nothing was stamped inside the hour),
+// so every sub-day interval must window on the UTC grid, spelled out so a
+// script-level `option location` cannot change it. Only a calendar day keeps the
+// house zone, where a 23h/25h day as one bucket is exactly what is wanted.
+func TestBuildFieldSeriesFlux_WindowLocation(t *testing.T) {
+	for _, iv := range []string{"5m", "15m", "30m", "1h", "6h"} {
+		flux := BuildFieldSeriesFlux("statehouse", []string{"d"}, "temperature_c", "mean", seriesStart, seriesStop, iv, "Europe/London")
+		if !strings.Contains(flux, "location: timezone.utc,") {
+			t.Errorf("%s: sub-day series must window on location: timezone.utc\n%s", iv, flux)
+		}
+		if strings.Contains(flux, "timezone.location(") {
+			t.Errorf("%s: sub-day series must not window on local time (stretches across a clock change)\n%s", iv, flux)
+		}
+	}
+	flux := BuildFieldSeriesFlux("statehouse", []string{"d"}, "temperature_c", "mean", seriesStart, seriesStop, "1d", "Europe/London")
+	if !strings.Contains(flux, `location: timezone.location(name: "Europe/London"),`) {
+		t.Errorf("1d must window on local calendar days\n%s", flux)
+	}
+}
+
+// TestBuildFieldSumCountFlux pins the single-pass shape the 6h mean fold reads
+// (PR #37 review): sum and count from ONE reduce() over ONE read, as floats,
+// stamped at the window start, on the UTC grid for a sub-day interval.
+func TestBuildFieldSumCountFlux(t *testing.T) {
+	flux := BuildFieldSumCountFlux("statehouse", []string{"a", "b"}, "temperature_c", seriesStart, seriesStop, "1h", "Europe/London")
+	for _, w := range []string{
+		`r._field == "temperature_c"`,
+		`contains(value: r.device_id, set: ["a", "b"])`,
+		`start: 2026-06-11T00:00:00Z`,
+		`|> window(every: 1h, location: timezone.utc)`,
+		`reduce(identity: {sum: 0.0, count: 0.0}`,
+		`count: accumulator.count + 1.0`,
+		`|> duplicate(column: "_start", as: "_time")`,
+		`|> window(every: inf)`,
+	} {
+		if !strings.Contains(flux, w) {
+			t.Errorf("sum/count flux missing %q\n%s", w, flux)
+		}
+	}
+	if n := strings.Count(flux, "from(bucket:"); n != 1 {
+		t.Errorf("sum and count must come from one read; %d from() calls\n%s", n, flux)
+	}
+	if strings.Contains(flux, "aggregateWindow") || strings.Contains(flux, "union(") {
+		t.Errorf("sum and count must come from one reduce(), not two aggregates\n%s", flux)
+	}
+	if strings.Contains(flux, "timezone.location(") {
+		t.Errorf("a sub-day sum/count must not window on local time\n%s", flux)
+	}
+
+	// The sim answers the builder's own flux with decodable sum+count rows.
+	at := []time.Time{seriesStart.Add(time.Minute), seriesStart.Add(2 * time.Minute)}
+	rows, err := NewGaugeSim("temperature_c").AddSamples("a", at, []float64{3, 5}).Answer(flux)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 || !rows[0].HasSumCount || rows[0].Sum != 8 || rows[0].Count != 2 || !rows[0].Time.Equal(seriesStart) {
+		t.Errorf("rows = %+v, want one decodable row sum 8 count 2 at %s", rows, seriesStart)
 	}
 }
 

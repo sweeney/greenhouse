@@ -64,6 +64,8 @@ remote_config:
   base_url: "https://config.swee.net"
 
 house:
+  # Must be a zone whose UTC offset is always a whole number of hours;
+  # e.g. Asia/Kolkata (+05:30) is refused at startup (see README "Clock changes").
   timezone: "Europe/London"
 
 auth:
