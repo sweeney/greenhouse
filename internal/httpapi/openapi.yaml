@@ -105,6 +105,8 @@ paths:
                 $ref: "#/components/schemas/DevicesCatalog"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/AuthUnavailable"
 
   /series:
     get:
@@ -153,6 +155,8 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/AuthUnavailable"
         "502":
           $ref: "#/components/responses/BadGateway"
 
@@ -198,6 +202,8 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/AuthUnavailable"
         "404":
           $ref: "#/components/responses/NotFound"
         "502":
@@ -226,6 +232,8 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/AuthUnavailable"
         "404":
           $ref: "#/components/responses/NotFound"
         "502":
@@ -269,6 +277,8 @@ paths:
                 $ref: "#/components/schemas/FloorsResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/AuthUnavailable"
 
   /rooms:
     get:
@@ -314,6 +324,8 @@ paths:
                 $ref: "#/components/schemas/RoomsResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/AuthUnavailable"
 
   /fields:
     get:
@@ -332,6 +344,8 @@ paths:
                 $ref: "#/components/schemas/FieldsResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "503":
+          $ref: "#/components/responses/AuthUnavailable"
 
 components:
   parameters:
@@ -580,6 +594,23 @@ components:
       bearerFormat: JWT
 
   responses:
+    AuthUnavailable:
+      description: >
+        The token could not be checked because the identity service's signing
+        keys are unavailable: its JWKS endpoint is unreachable, and this server
+        either holds no keys or holds keys too old to keep trusting (30 minutes).
+        This says nothing about the token itself, so do NOT discard it or sign
+        the user out. Retry after the Retry-After interval. There is no
+        WWW-Authenticate challenge.
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Seconds to wait before retrying.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
     Unauthorized:
       description: Missing or invalid Bearer JWT
       headers:

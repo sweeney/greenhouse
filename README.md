@@ -29,7 +29,10 @@ and `statehouse` (real-time state), and mirrors their conventions. See
 
 Listen port **:8082** (statehouse :8080, countinghouse :8081). All times
 Europe/London. `/healthz` and `/openapi.json` are public; everything else
-requires a Bearer JWT (user **or** service token).
+requires a Bearer JWT (user **or** service token). A missing or bad token is a
+`401`. A token that could not be *checked*, because identity's signing keys are
+unavailable, is a `503` with `Retry-After` and no `WWW-Authenticate`: an
+identity outage must not tell clients to sign out.
 
 | Route | Returns |
 |---|---|
