@@ -167,10 +167,15 @@ shapes, the Influx Querier + fake, the Server/auth/CORS/spec skeleton, the confi
   order for `/floors`; unset is silent and never affects the devices snapshot). It does NOT use
   `energy_tariffs`. `/healthz`'s `remote_config` block is keyed by whichever namespaces are
   actually read. Fetches are fail-open (log + keep last-known) with SIGHUP reload.
-- Auth via `github.com/sweeney/identity/common` **v0.3.0**: `auth.JWKSVerifier` verifies inbound
-  tokens (JWKS); `auth.TokenSource` is the shared outbound `client_credentials` source (no local
-  copy — it was extracted to common in v0.3.0). **Accept service tokens** (`ParseServiceToken`) as
-  well as user tokens in the inbound middleware — greenhouse is likely called by other services.
+- Auth via `github.com/sweeney/identity/common` **v0.7.0** (which holds only `auth`):
+  `auth.JWKSVerifier` verifies inbound tokens (JWKS); `auth.TokenSource` is the shared outbound
+  `client_credentials` source (no local copy — it was extracted to common in v0.3.0). **Accept
+  service tokens** (`ParseServiceToken`) as well as user tokens in the inbound middleware —
+  greenhouse is likely called by other services. A token that could not be checked
+  (`auth.ErrKeysUnavailable`: identity's JWKS unreachable) is a **503**, never a 401 — a 401
+  during an identity outage would tell every client to sign out.
+- The OpenAPI `spec.Converter` comes from `github.com/sweeney/common/web/spec` (`web` module),
+  where identity/common's generic packages moved in v0.7.0.
 - Greenhouse needs its own Influx **read token** (scoped to the `statehouse` bucket) and its own
   `client_id`/`client_secret` registered in id.swee.net.
 

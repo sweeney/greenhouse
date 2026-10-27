@@ -15,12 +15,12 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/sweeney/common/web/spec"
 	"github.com/sweeney/greenhouse/internal/climate"
 	"github.com/sweeney/greenhouse/internal/config"
 	"github.com/sweeney/greenhouse/internal/influx"
 	"github.com/sweeney/greenhouse/internal/testutil"
 	"github.com/sweeney/identity/common/auth"
-	"github.com/sweeney/identity/common/spec"
 )
 
 // ConfigProvider supplies the current remote-config snapshot the data handlers

@@ -44,6 +44,9 @@ func fakeJWKSServer(t *testing.T, pub *ecdsa.PublicKey, kid string) *httptest.Se
 			http.NotFound(w, r)
 			return
 		}
+		// The verifier refuses a JWKS served as anything but JSON, as
+		// Identity's real endpoint is.
+		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
 			"keys": []map[string]any{{
 				"kty": "EC", "use": "sig", "alg": "ES256",
