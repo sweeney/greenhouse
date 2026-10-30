@@ -2,11 +2,17 @@ package httpapi
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
+	"github.com/sweeney/greenhouse/internal/config"
 	"github.com/sweeney/identity/common/auth"
 )
+
+// Audience is the `aud` a token must carry to read greenhouse, under
+// Server.AudienceCheck.
+const Audience = "greenhouse"
 
 // authMiddleware returns a middleware that validates Bearer JWTs when
 // IdentityURL is set. When IdentityURL is empty it returns a no-op wrapper so
@@ -19,11 +25,25 @@ func (s *Server) authMiddleware() func(http.Handler) http.Handler {
 		}
 		return func(h http.Handler) http.Handler { return h }
 	}
-	verifier, err := auth.NewJWKSVerifier(auth.JWKSVerifierConfig{
+	vc := auth.JWKSVerifierConfig{
 		IssuerURL: s.IdentityURL,
 		Issuer:    s.IdentityURL,
 		Logger:    s.Logger,
-	})
+	}
+	switch s.AudienceCheck {
+	case config.AudienceWarn:
+		// Accepted, and logged with the caller's subject and audience: each
+		// warning is a caller that enforcing would lock out.
+		vc.RequiredAudience, vc.RequiredAudienceWarnOnly = Audience, true
+	case config.AudienceEnforce:
+		vc.RequiredAudience = Audience
+	case config.AudienceOff, "":
+	default:
+		// config.Load refuses this; reaching here means a Server built by hand.
+		// A misspelt mode must not quietly mean off.
+		panic(fmt.Sprintf("httpapi: unknown AudienceCheck %q", s.AudienceCheck))
+	}
+	verifier, err := auth.NewJWKSVerifier(vc)
 	if err != nil {
 		// Only fails when IssuerURL or Issuer is empty, guarded above.
 		panic(err)
@@ -50,7 +70,8 @@ func requireAuth(verifier *auth.JWKSVerifier, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reject := func() {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="`+verifier.Issuer()+`"`)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			// JSON, as the spec's Unauthorized response documents.
+			writeError(w, http.StatusUnauthorized, "unauthorized")
 		}
 		token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if !ok || token == "" {

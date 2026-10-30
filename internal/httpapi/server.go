@@ -78,6 +78,12 @@ type Server struct {
 	// (user OR service token). When empty, auth is disabled (local dev/tests).
 	IdentityURL string
 
+	// AudienceCheck is config.HTTPConfig.AudienceCheck: config.AudienceWarn,
+	// AudienceEnforce or AudienceOff. Empty means off, for tests and local runs;
+	// anything else panics when the middleware is built. The audience required
+	// is Audience.
+	AudienceCheck string
+
 	// PublicURL is the externally-reachable base URL of this server. When set it
 	// is substituted into the OpenAPI spec's servers list; empty leaves the
 	// placeholder as-is.
