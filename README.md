@@ -464,6 +464,11 @@ and `/rooms` still list everything that holds an ambient sensor — with `name`,
 failure is fail-open and never touches the devices snapshot. A missing floorplan can
 degrade the labels; it can never stop a climate service serving climate.
 
+Either name, when set, must be one the config service accepts (`^[a-z0-9_-]{1,64}$`), or
+greenhouse refuses to start. Optional means the floorplan may be left unset, not that it
+may name something that can never be fetched: such a name is refused without a request,
+so at runtime it would only ever be one more fail-open warning.
+
 The floorplan document is an **array**, unlike the devices namespace's map keyed by id:
 
 ```json
@@ -555,6 +560,6 @@ commit.
 The generic time-series scaffolding (windowing, interval/bucket axis,
 columnar/rows shapes, Influx Querier+fake, Server/auth/CORS/spec skeleton)
 is **copied** from countinghouse. The config Fetcher's transport is not: it is
-`github.com/sweeney/common/remoteconfig`, shared with countinghouse. The plan is to extract the
+`github.com/sweeney/common/remoteconfig`, which countinghouse is moving to too. The plan is to extract the
 common core into a shared `github.com/sweeney/timeseries` module once greenhouse
 is real (PLAN.md §10).

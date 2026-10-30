@@ -56,3 +56,38 @@ func TestBootAllowsAFullyNamedSite(t *testing.T) {
 		t.Errorf("a fully named site must boot: %v", err)
 	}
 }
+
+// A name config would refuse never reaches it: remoteconfig rejects it locally and
+// sends nothing. At runtime that is one more fail-open warning over an empty
+// snapshot, so the name is checked here instead, where it can stop the boot.
+func TestBootRefusesANamespaceNameConfigCannotServe(t *testing.T) {
+	cases := []struct {
+		field string
+		set   func(*config.Config)
+	}{
+		{"devices_namespace", func(c *config.Config) { c.Site.DevicesNamespace = "Devices.Home" }},
+		{"floorplan_namespace", func(c *config.Config) { c.Site.FloorplanNamespace = "floor plan" }},
+		{"floorplan_namespace", func(c *config.Config) { c.Site.FloorplanNamespace = strings.Repeat("f", 65) }},
+	}
+	for _, tc := range cases {
+		cfg := baseConfig()
+		tc.set(&cfg)
+		err := validateBootConfig(cfg)
+		if err == nil {
+			t.Errorf("%s: an invalid name must refuse to boot", tc.field)
+			continue
+		}
+		if !strings.Contains(err.Error(), tc.field) {
+			t.Errorf("error must name %q so it is actionable, got: %v", tc.field, err)
+		}
+	}
+}
+
+func TestBootAllowsValidNamespaceNames(t *testing.T) {
+	cfg := baseConfig()
+	cfg.Site.DevicesNamespace = "devices_home-2"
+	cfg.Site.FloorplanNamespace = "floorplan_home"
+	if err := validateBootConfig(cfg); err != nil {
+		t.Errorf("valid names must boot: %v", err)
+	}
+}

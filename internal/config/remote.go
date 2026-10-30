@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -137,8 +138,35 @@ func (f *Fetcher) Refresh(ctx context.Context) {
 		f.warn("remote config: no devices namespace configured, not fetching")
 		return
 	}
-	f.refreshDevices(ctx)
-	f.refreshFloorplan(ctx)
+	if f.Tokens != nil {
+		// One token serves every namespace: remoteconfig asks for it per request,
+		// and the TokenSource answers from its cache. Asking here first means a
+		// token that cannot be had costs identity one call rather than one per
+		// namespace, and that every namespace records the real cause. Otherwise a
+		// hung identity would spend the whole refresh deadline on devices, and
+		// floorplan would record only the deadline.
+		if _, err := f.Tokens.Token(ctx); err != nil {
+			err = fmt.Errorf("remote config token: %w", err)
+			for _, ns := range []string{f.DevicesNamespace, f.FloorplanNamespace} {
+				if ns != "" {
+					f.warn("remote config: namespace unavailable, keeping last-known",
+						"namespace", ns, "error", err)
+					f.tracker.Record(ns, err)
+				}
+			}
+			return
+		}
+	}
+	// Built once per Refresh, so one refresh reads every namespace with the
+	// same settings.
+	c := &remoteconfig.Client{
+		BaseURL:    f.BaseURL,
+		Tokens:     f.Tokens,
+		UserAgent:  f.UserAgent,
+		HTTPClient: f.HTTPClient,
+	}
+	f.refreshDevices(ctx, c)
+	f.refreshFloorplan(ctx, c)
 }
 
 // refreshFloorplan fetches the optional floorplan namespace, which carries both
@@ -149,15 +177,15 @@ func (f *Fetcher) Refresh(ctx context.Context) {
 // unhealthy about. A configured-but-failing namespace does record one, so an
 // operator who asked for floor records can see they are not arriving — but it
 // still never blocks the devices snapshot or the endpoints that matter.
-func (f *Fetcher) refreshFloorplan(ctx context.Context) {
+func (f *Fetcher) refreshFloorplan(ctx context.Context, c *remoteconfig.Client) {
 	if f.FloorplanNamespace == "" {
 		return
 	}
 	var doc floorplanDocument
-	if err := f.fetch(ctx, f.FloorplanNamespace, &doc); err != nil {
+	if err := c.Get(ctx, f.FloorplanNamespace, &doc); err != nil {
 		f.warn("remote config: floorplan namespace unavailable, keeping last-known",
 			"namespace", f.FloorplanNamespace, "error", err)
-		f.recordStatus(f.FloorplanNamespace, err)
+		f.tracker.Record(f.FloorplanNamespace, err)
 		return
 	}
 	floors, rooms := doc.Floors, doc.Rooms
@@ -174,42 +202,25 @@ func (f *Fetcher) refreshFloorplan(ctx context.Context) {
 	f.mu.Lock()
 	f.floors, f.rooms = floors, rooms
 	f.mu.Unlock()
-	f.recordStatus(f.FloorplanNamespace, nil)
+	f.tracker.Record(f.FloorplanNamespace, nil)
 }
 
-func (f *Fetcher) refreshDevices(ctx context.Context) {
+// refreshDevices needs no nil guard on the decoded map: remoteconfig refuses any
+// body that is not a JSON object, and decoding an object into a nil map always
+// allocates it.
+func (f *Fetcher) refreshDevices(ctx context.Context, c *remoteconfig.Client) {
 	var devices map[string]DeviceConfig
-	if err := f.fetch(ctx, f.DevicesNamespace, &devices); err != nil {
+	if err := c.Get(ctx, f.DevicesNamespace, &devices); err != nil {
 		f.warn("remote config: devices namespace unavailable, keeping last-known",
 			"namespace", f.DevicesNamespace, "error", err)
-		f.recordStatus(f.DevicesNamespace, err)
+		f.tracker.Record(f.DevicesNamespace, err)
 		return
-	}
-	if devices == nil {
-		devices = map[string]DeviceConfig{}
 	}
 	normaliseDevices(devices)
 	f.mu.Lock()
 	f.devices = devices
 	f.mu.Unlock()
-	f.recordStatus(f.DevicesNamespace, nil)
-}
-
-func (f *Fetcher) recordStatus(ns string, err error) {
-	f.tracker.Record(ns, err)
-}
-
-// fetch reads one namespace. A Client is built per call from the exported
-// fields, so a Fetcher whose BaseURL or Tokens change between refreshes reads
-// with the current ones.
-func (f *Fetcher) fetch(ctx context.Context, ns string, dst any) error {
-	c := remoteconfig.Client{
-		BaseURL:    f.BaseURL,
-		Tokens:     f.Tokens,
-		UserAgent:  f.UserAgent,
-		HTTPClient: f.HTTPClient,
-	}
-	return c.Get(ctx, ns, dst)
+	f.tracker.Record(f.DevicesNamespace, nil)
 }
 
 func (f *Fetcher) warn(msg string, args ...any) {
