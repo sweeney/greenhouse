@@ -553,7 +553,8 @@ commit.
 ## Follow-up
 
 The generic time-series scaffolding (windowing, interval/bucket axis,
-columnar/rows shapes, Influx Querier+fake, Server/auth/CORS/spec skeleton,
-config Fetcher) is **copied** from countinghouse. The plan is to extract the
+columnar/rows shapes, Influx Querier+fake, Server/auth/CORS/spec skeleton)
+is **copied** from countinghouse. The config Fetcher's transport is not: it is
+`github.com/sweeney/common/remoteconfig`, shared with countinghouse. The plan is to extract the
 common core into a shared `github.com/sweeney/timeseries` module once greenhouse
 is real (PLAN.md §10).

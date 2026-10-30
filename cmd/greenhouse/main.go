@@ -69,6 +69,7 @@ func main() {
 		BaseURL:          cfg.RemoteConfig.BaseURL,
 		Tokens:           tokens,
 		Logger:           logger,
+		UserAgent:        "greenhouse/" + version,
 		DevicesNamespace: cfg.Site.DevicesNamespace,
 		// Optional: unset simply means /floors reports every floor's name and
 		// order as unknown.

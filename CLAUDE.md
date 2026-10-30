@@ -9,7 +9,8 @@ It is the **climate sibling** of `countinghouse` (energy cost) and `statehouse` 
 Mirror their conventions: `../countinghouse` is the closest template (greenhouse mirrors it minus
 the energy bits) and `../statehouse` is the canonical "how we build Go services here". Reuse
 countinghouse's domain-agnostic scaffolding (windowing, interval/bucket axis, columnar/rows series
-shapes, the Influx Querier + fake, the Server/auth/CORS/spec skeleton, the config Fetcher).
+shapes, the Influx Querier + fake, the Server/auth/CORS/spec skeleton). The config Fetcher's
+transport is shared already, in `sweeney/common/remoteconfig`.
 
 ## Core invariants (don't violate without discussion)
 
@@ -176,6 +177,10 @@ shapes, the Influx Querier + fake, the Server/auth/CORS/spec skeleton, the confi
   during an identity outage would tell every client to sign out.
 - The OpenAPI `spec.Converter` comes from `github.com/sweeney/common/web/spec` (`web` module),
   where identity/common's generic packages moved in v0.7.0.
+- The config-service transport comes from `github.com/sweeney/common/remoteconfig` (**v0.1.0**):
+  `remoteconfig.Client` does the GET (name check, one 401 retry with a fresh token, JSON-object
+  check) and `remoteconfig.Tracker` keeps the per-namespace `/healthz` status. `internal/config`
+  keeps the namespaces, the decoding into `DeviceConfig`, and the last good snapshot.
 - Greenhouse needs its own Influx **read token** (scoped to the `statehouse` bucket) and its own
   `client_id`/`client_secret` registered in id.swee.net.
 

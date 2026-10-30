@@ -199,3 +199,70 @@ func (errTokenSource) Token(context.Context) (string, error) {
 	return "", context.DeadlineExceeded
 }
 func (errTokenSource) Invalidate() {}
+
+// rotatingTokenSource issues "stale-token" until invalidated, then "test-token".
+type rotatingTokenSource struct{ invalidated int }
+
+func (r *rotatingTokenSource) Token(context.Context) (string, error) {
+	if r.invalidated == 0 {
+		return "stale-token", nil
+	}
+	return "test-token", nil
+}
+func (r *rotatingTokenSource) Invalidate() { r.invalidated++ }
+
+// A token that expired between being minted and being used is retried at once
+// with a fresh one. Before remoteconfig the 401 only invalidated it, and the
+// service ran on its old snapshot until the next SIGHUP.
+func TestFetcher_401RetriesWithFreshToken(t *testing.T) {
+	mux := http.NewServeMux()
+	serveNamespace(mux, testNamespace, map[string]any{
+		"sensor_d": map[string]any{"class": "environmental_sensor"},
+	})
+	src := &rotatingTokenSource{}
+	f := newTestFetcher(t, mux, src)
+	f.Refresh(context.Background())
+
+	if src.invalidated != 1 {
+		t.Errorf("invalidated = %d, want 1", src.invalidated)
+	}
+	if _, ok := f.Devices()["sensor_d"]; !ok {
+		t.Error("the retry with a fresh token should have populated the snapshot")
+	}
+	if !f.Statuses()[testNamespace].OK {
+		t.Error("status should be OK after a successful retry")
+	}
+}
+
+// A token failure is recorded against every configured namespace, the floorplan
+// included, so /healthz does not show a stale OK for one of them.
+func TestFetcher_TokenFailureRecordedPerNamespace(t *testing.T) {
+	f := &Fetcher{BaseURL: "https://config.test", Tokens: &errTokenSource{},
+		DevicesNamespace: testNamespace, FloorplanNamespace: "floorplan_home"}
+	f.Refresh(context.Background())
+
+	st := f.Statuses()
+	for _, ns := range []string{testNamespace, "floorplan_home"} {
+		s, ok := st[ns]
+		if !ok || s.OK || s.Error == "" {
+			t.Errorf("status[%s] = %+v, %v; want a recorded failure", ns, s, ok)
+		}
+	}
+}
+
+// The User-Agent names greenhouse, so config's logs say who is reading.
+func TestFetcher_SendsUserAgent(t *testing.T) {
+	var got string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/config/"+testNamespace, func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("User-Agent")
+		w.Write([]byte(`{}`)) //nolint:errcheck
+	})
+	f := newTestFetcher(t, mux, &staticTokenSource{token: "test-token"})
+	f.UserAgent = "greenhouse/abc123"
+	f.Refresh(context.Background())
+
+	if got != "greenhouse/abc123" {
+		t.Errorf("User-Agent = %q", got)
+	}
+}
