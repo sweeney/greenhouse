@@ -1,9 +1,11 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/sweeney/common/remoteconfig"
 	"github.com/sweeney/greenhouse/internal/config"
 )
 
@@ -79,6 +81,9 @@ func TestBootRefusesANamespaceNameConfigCannotServe(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), tc.field) {
 			t.Errorf("error must name %q so it is actionable, got: %v", tc.field, err)
+		}
+		if !errors.Is(err, remoteconfig.ErrInvalidName) {
+			t.Errorf("error %q does not wrap remoteconfig.ErrInvalidName", err)
 		}
 	}
 }
