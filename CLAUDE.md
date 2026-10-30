@@ -167,7 +167,10 @@ transport is shared already, in `sweeney/common/remoteconfig`.
   while looking healthy) — plus the OPTIONAL `site.floorplan_namespace` (floor names and storey
   order for `/floors`; unset is silent and never affects the devices snapshot). It does NOT use
   `energy_tariffs`. `/healthz`'s `remote_config` block is keyed by whichever namespaces are
-  actually read. Fetches are fail-open (log + keep last-known) with SIGHUP reload.
+  actually read. Fetches are fail-open (log + keep last-known) with SIGHUP reload, except
+  that **boot needs truth**: devices never fetched at startup abort the boot
+  (`Fetcher.Cold()` → `requireWarmDevices`), while every later failure, SIGHUP included, is
+  stale and only degrades `/healthz`. The floorplan never counts as cold.
 - Auth via `github.com/sweeney/identity/common` **v0.7.0** (which holds only `auth`):
   `auth.JWKSVerifier` verifies inbound tokens (JWKS); `auth.TokenSource` is the shared outbound
   `client_credentials` source (no local copy — it was extracted to common in v0.3.0). **Accept

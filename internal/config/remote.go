@@ -111,6 +111,23 @@ func (f *Fetcher) Rooms() map[string]RoomConfig {
 	return out
 }
 
+// Cold returns the devices namespace if it has never been fetched successfully,
+// or nil once it has landed.
+//
+// Cold is the state fail-open cannot cover: with nothing ever fetched there is
+// no last-known snapshot to keep, and greenhouse would serve zero devices in the
+// confident shape of a correct answer while /healthz said ok. So main.go refuses
+// to boot on a non-empty result. It is a query rather than an error from Refresh
+// because the two callers want opposite things: startup must refuse, and a
+// SIGHUP reload must not, since by then a snapshot exists and a later failure is
+// merely stale.
+//
+// Only devices count. The floorplan is presentation detail and optional, so its
+// never landing must not stop a climate service serving climate.
+func (f *Fetcher) Cold() []string {
+	return f.tracker.Cold(f.DevicesNamespace)
+}
+
 // Statuses returns a snapshot of the last fetch result for each namespace.
 // Implements httpapi.ConfigStatus.
 func (f *Fetcher) Statuses() map[string]NamespaceStatus {
