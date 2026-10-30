@@ -44,6 +44,9 @@ site:
 http:
   listen: ":8686"
   public_url: "https://greenhouse.swee.net"
+  # How a token's `aud` is checked against "greenhouse": warn (default:
+  # accept, and log the caller), enforce (401), or off.
+  # audience_check: warn
 
 influx:
   url: "http://garibaldi:8086"

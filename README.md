@@ -30,7 +30,17 @@ and `statehouse` (real-time state), and mirrors their conventions. See
 Listen port **:8082** (statehouse :8080, countinghouse :8081). All times
 Europe/London. `/healthz` and `/openapi.json` are public; everything else
 requires a Bearer JWT (user **or** service token). A missing or bad token is a
-`401`. A token that could not be *checked*, because identity's signing keys are
+`401`, with a JSON `{"error": …}` body and a `WWW-Authenticate` challenge.
+
+A token's `aud` is checked against `greenhouse` under `http.audience_check`:
+`warn` (the default) accepts a token that does not name greenhouse and logs
+`token would be rejected by audience enforcement` with its subject and audience;
+`enforce` answers it `401`; `off` does neither. An unknown value refuses to
+start. Warn is the default so the check could ship before the warnings were
+read; each one is a caller that `enforce` would lock out, so read them first
+(`journalctl -u greenhouse | grep 'audience enforcement'`). Moving to enforce is
+then a one-line change to the default, in git. User tokens from id.swee.net
+already carry `greenhouse` in `aud`. A token that could not be *checked*, because identity's signing keys are
 unavailable, is a `503` with `Retry-After` and no `WWW-Authenticate`: an
 identity outage must not tell clients to sign out.
 

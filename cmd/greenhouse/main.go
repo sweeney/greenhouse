@@ -103,15 +103,17 @@ func main() {
 	location := cfg.House.Location()
 
 	server := &httpapi.Server{
-		Listen:             cfg.HTTP.Listen,
-		Influx:             influxClient,
-		Bucket:             cfg.Influx.Bucket,
-		Clock:              testutil.RealClock{},
-		Loc:                location,
-		Config:             fetcher,
-		Floorplan:          fetcher,
-		RemoteConfig:       fetcher,
-		IdentityURL:        cfg.Identity.BaseURL,
+		Listen:       cfg.HTTP.Listen,
+		Influx:       influxClient,
+		Bucket:       cfg.Influx.Bucket,
+		Clock:        testutil.RealClock{},
+		Loc:          location,
+		Config:       fetcher,
+		Floorplan:    fetcher,
+		RemoteConfig: fetcher,
+		IdentityURL:  cfg.Identity.BaseURL,
+		// warn unless the config file says otherwise; see HTTPConfig.AudienceCheck.
+		AudienceCheck:      cfg.HTTP.AudienceCheck,
 		PublicURL:          cfg.HTTP.PublicURL,
 		Version:            version,
 		SiteID:             cfg.Site.ID,

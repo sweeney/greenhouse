@@ -177,7 +177,9 @@ transport is shared already, in `sweeney/common/remoteconfig`.
   service tokens** (`ParseServiceToken`) as well as user tokens in the inbound middleware —
   greenhouse is likely called by other services. A token that could not be checked
   (`auth.ErrKeysUnavailable`: identity's JWKS unreachable) is a **503**, never a 401 — a 401
-  during an identity outage would tell every client to sign out.
+  during an identity outage would tell every client to sign out. A token's `aud` is checked
+  against `greenhouse` under `http.audience_check` (`warn` by default: accept and log; `enforce`:
+  401; `off`). Read the warnings before moving the default to enforce. 401 bodies are JSON.
 - The OpenAPI `spec.Converter` comes from `github.com/sweeney/common/web/spec` (`web` module),
   where identity/common's generic packages moved in v0.7.0.
 - The config-service transport comes from `github.com/sweeney/common/remoteconfig` (**v0.1.0**):
