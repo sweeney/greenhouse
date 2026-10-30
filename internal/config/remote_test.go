@@ -3,9 +3,13 @@ package config
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // staticTokenSource satisfies TokenSource for tests.
@@ -135,8 +139,10 @@ func TestFetcher_401InvalidatesAndKeepsSnapshot(t *testing.T) {
 	}
 
 	// Phase 2: point the fetcher at a server that always 401s.
+	var badRequests atomic.Int32
 	bad := http.NewServeMux()
 	bad.HandleFunc("/api/v1/config/"+testNamespace, func(w http.ResponseWriter, r *http.Request) {
+		badRequests.Add(1)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 	})
 	badSrv := httptest.NewServer(bad)
@@ -149,6 +155,11 @@ func TestFetcher_401InvalidatesAndKeepsSnapshot(t *testing.T) {
 
 	if !src.invalidated {
 		t.Error("expected Invalidate() after 401")
+	}
+	// Exactly one retry: a persistent 401 is neither given up on at once nor
+	// retried until the refresh deadline.
+	if n := badRequests.Load(); n != 2 {
+		t.Errorf("a persistent 401 got %d requests, want 2 (the first and one retry)", n)
 	}
 	// Fail-open: prior snapshot is retained.
 	if _, ok := f.Devices()["sensor_b"]; !ok {
@@ -199,3 +210,129 @@ func (errTokenSource) Token(context.Context) (string, error) {
 	return "", context.DeadlineExceeded
 }
 func (errTokenSource) Invalidate() {}
+
+// rotatingTokenSource issues "stale-token" until invalidated, then "test-token".
+type rotatingTokenSource struct{ invalidated int }
+
+func (r *rotatingTokenSource) Token(context.Context) (string, error) {
+	if r.invalidated == 0 {
+		return "stale-token", nil
+	}
+	return "test-token", nil
+}
+func (r *rotatingTokenSource) Invalidate() { r.invalidated++ }
+
+// A token that expired between being minted and being used is retried at once
+// with a fresh one. Before remoteconfig the 401 only invalidated it, and the
+// service ran on its old snapshot until the next SIGHUP.
+func TestFetcher_401RetriesWithFreshToken(t *testing.T) {
+	mux := http.NewServeMux()
+	serveNamespace(mux, testNamespace, map[string]any{
+		"sensor_d": map[string]any{"class": "environmental_sensor"},
+	})
+	src := &rotatingTokenSource{}
+	f := newTestFetcher(t, mux, src)
+	f.Refresh(context.Background())
+
+	if src.invalidated != 1 {
+		t.Errorf("invalidated = %d, want 1", src.invalidated)
+	}
+	if _, ok := f.Devices()["sensor_d"]; !ok {
+		t.Error("the retry with a fresh token should have populated the snapshot")
+	}
+	if !f.Statuses()[testNamespace].OK {
+		t.Error("status should be OK after a successful retry")
+	}
+}
+
+// A token failure is recorded against every configured namespace, the floorplan
+// included, so /healthz does not show a stale OK for one of them.
+func TestFetcher_TokenFailureRecordedPerNamespace(t *testing.T) {
+	f := &Fetcher{BaseURL: "https://config.test", Tokens: &errTokenSource{},
+		DevicesNamespace: testNamespace, FloorplanNamespace: "floorplan_home"}
+	f.Refresh(context.Background())
+
+	st := f.Statuses()
+	for _, ns := range []string{testNamespace, "floorplan_home"} {
+		s, ok := st[ns]
+		if !ok || s.OK || s.Error == "" {
+			t.Errorf("status[%s] = %+v, %v; want a recorded failure", ns, s, ok)
+		}
+	}
+}
+
+// countingErrTokenSource fails every Token call and counts them.
+type countingErrTokenSource struct{ calls atomic.Int32 }
+
+func (c *countingErrTokenSource) Token(context.Context) (string, error) {
+	c.calls.Add(1)
+	return "", errors.New("identity: invalid_client")
+}
+func (c *countingErrTokenSource) Invalidate() {}
+
+// hangingTokenSource blocks until the context ends, as a hung identity does.
+type hangingTokenSource struct{ calls atomic.Int32 }
+
+func (h *hangingTokenSource) Token(ctx context.Context) (string, error) {
+	h.calls.Add(1)
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+func (h *hangingTokenSource) Invalidate() {}
+
+// A token that cannot be had stops the whole Refresh after one attempt, and
+// the cause is recorded against every configured namespace. Asking identity
+// again per namespace would double the load on it while it is failing.
+func TestFetcher_TokenFailureAsksIdentityOnce(t *testing.T) {
+	src := &countingErrTokenSource{}
+	f := &Fetcher{BaseURL: "https://config.test", Tokens: src,
+		DevicesNamespace: testNamespace, FloorplanNamespace: "floorplan_home"}
+	f.Refresh(context.Background())
+
+	if n := src.calls.Load(); n != 1 {
+		t.Errorf("Token called %d times in one Refresh, want 1", n)
+	}
+	for ns, s := range f.Statuses() {
+		if !strings.Contains(s.Error, "invalid_client") {
+			t.Errorf("status[%s].Error = %q, want the token error", ns, s.Error)
+		}
+	}
+}
+
+// A hung identity uses up the refresh deadline once. The floorplan status must
+// name the token as the cause, as devices' does, rather than recording a bare
+// deadline from a fetch that never had time to start.
+func TestFetcher_HungIdentityRecordsTheSameCauseForEveryNamespace(t *testing.T) {
+	src := &hangingTokenSource{}
+	f := &Fetcher{BaseURL: "https://config.test", Tokens: src,
+		DevicesNamespace: testNamespace, FloorplanNamespace: "floorplan_home"}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	f.Refresh(ctx)
+
+	if n := src.calls.Load(); n != 1 {
+		t.Errorf("Token called %d times in one Refresh, want 1", n)
+	}
+	st := f.Statuses()
+	dev, fp := st[testNamespace], st["floorplan_home"]
+	if dev.OK || fp.OK || dev.Error == "" || dev.Error != fp.Error {
+		t.Errorf("statuses = devices %+v, floorplan %+v; want the same token failure", dev, fp)
+	}
+}
+
+// The User-Agent names greenhouse, so config's logs say who is reading.
+func TestFetcher_SendsUserAgent(t *testing.T) {
+	var got string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/config/"+testNamespace, func(w http.ResponseWriter, r *http.Request) {
+		got = r.Header.Get("User-Agent")
+		w.Write([]byte(`{}`)) //nolint:errcheck
+	})
+	f := newTestFetcher(t, mux, &staticTokenSource{token: "test-token"})
+	f.UserAgent = "greenhouse/abc123"
+	f.Refresh(context.Background())
+
+	if got != "greenhouse/abc123" {
+		t.Errorf("User-Agent = %q", got)
+	}
+}

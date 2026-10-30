@@ -2,9 +2,14 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 
 	"github.com/sweeney/greenhouse/internal/config"
 )
+
+// namespaceNameRE is the config service's rule for a namespace name, the same
+// one remoteconfig checks before each request.
+var namespaceNameRE = regexp.MustCompile(`^[a-z0-9_-]{1,64}$`)
 
 // validateBootConfig enforces the secure-by-default boundary at startup.
 //
@@ -23,11 +28,27 @@ import (
 // failing namespace is only degraded and there is no last-known-good to be missing,
 // and every endpoint honestly reports zero devices. Boot is the only place that can
 // still tell the difference between "unnamed" and "named and empty".
+//
+// A namespace name the config service would refuse is a boot refusal too, the
+// floorplan's included: optional means it may be left unset, not that it may be
+// set to something that can never be fetched. remoteconfig rejects such a name
+// without sending a request, so at runtime it would be just one more fail-open
+// warning over an empty snapshot.
 func validateBootConfig(cfg config.Config) error {
 	if cfg.Identity.BaseURL == "" && !cfg.Auth.AllowInsecure {
 		return fmt.Errorf("identity.base_url is empty and auth.allow_insecure is not set; " +
 			"the data API would be unauthenticated. Set identity.base_url, or set " +
 			"auth.allow_insecure: true to run without auth (dev only)")
+	}
+	for _, n := range []struct{ field, name string }{
+		{"site.devices_namespace", cfg.Site.DevicesNamespace},
+		{"site.floorplan_namespace", cfg.Site.FloorplanNamespace},
+	} {
+		if n.name != "" && !namespaceNameRE.MatchString(n.name) {
+			return fmt.Errorf("%s %q is not a name the config service accepts "+
+				"(lowercase letters, digits, _ and -, at most 64), so it could never be "+
+				"fetched", n.field, n.name)
+		}
 	}
 	if cfg.Site.DevicesNamespace == "" {
 		return fmt.Errorf("site.devices_namespace is not set, so there is no device " +
