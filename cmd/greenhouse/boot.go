@@ -2,14 +2,10 @@ package main
 
 import (
 	"fmt"
-	"regexp"
 
+	"github.com/sweeney/common/remoteconfig"
 	"github.com/sweeney/greenhouse/internal/config"
 )
-
-// namespaceNameRE is the config service's rule for a namespace name, the same
-// one remoteconfig checks before each request.
-var namespaceNameRE = regexp.MustCompile(`^[a-z0-9_-]{1,64}$`)
 
 // validateBootConfig enforces the secure-by-default boundary at startup.
 //
@@ -44,10 +40,17 @@ func validateBootConfig(cfg config.Config) error {
 		{"site.devices_namespace", cfg.Site.DevicesNamespace},
 		{"site.floorplan_namespace", cfg.Site.FloorplanNamespace},
 	} {
-		if n.name != "" && !namespaceNameRE.MatchString(n.name) {
+		// Empty is unset, not invalid: the floorplan is optional, and an unset
+		// devices namespace gets its own message below.
+		if n.name == "" {
+			continue
+		}
+		// remoteconfig.ValidName is the check Get makes before each request, so
+		// boot and every fetch apply one rule.
+		if err := remoteconfig.ValidName(n.name); err != nil {
 			return fmt.Errorf("%s %q is not a name the config service accepts "+
 				"(lowercase letters, digits, _ and -, at most 64), so it could never be "+
-				"fetched", n.field, n.name)
+				"fetched: %w", n.field, n.name, err)
 		}
 	}
 	if cfg.Site.DevicesNamespace == "" {
