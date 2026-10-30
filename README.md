@@ -498,7 +498,14 @@ Local YAML (`/etc/greenhouse/config.yaml`, see `config/config.example.yaml`):
 `site{id,devices_namespace,floorplan_namespace}`, `house.timezone`, `auth.allow_insecure`. Device inventory
 is fetched from the remote config service (one devices namespace only — **no** tariffs,
 and `site.devices_namespace` must name it). Fetches are fail-open
-(log + keep last-known) with SIGHUP reload. Greenhouse needs its own Influx
+(log + keep last-known) with SIGHUP reload, with one exception: **boot needs
+truth, running keeps the last truth.** If the devices namespace has never been
+fetched by the end of the startup refresh, greenhouse refuses to start
+(`remote config: refusing to start`, naming the namespace) rather than serve zero
+devices while `/healthz` says ok; systemd's restart loop recovers once config
+answers. A later failure, SIGHUP included, is stale rather than cold and only
+degrades `/healthz`. The floorplan never counts: it is optional. An empty
+`remote_config.base_url` is the local-dev opt-out and skips the check. Greenhouse needs its own Influx
 **read token** (statehouse bucket) and `client_id`/`secret` in id.swee.net.
 
 **`house.timezone`** is a tz database name. It must be a zone whose UTC offset is

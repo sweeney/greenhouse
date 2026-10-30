@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/sweeney/common/remoteconfig"
 	"github.com/sweeney/greenhouse/internal/config"
@@ -59,4 +60,21 @@ func validateBootConfig(cfg config.Config) error {
 			"explicitly, e.g.:\n\nsite:\n  id: home\n  devices_namespace: devices_home")
 	}
 	return nil
+}
+
+// requireWarmDevices refuses startup when the devices namespace has never been
+// fetched: boot needs truth, running keeps the last truth. See Fetcher.Cold.
+//
+// It runs only at startup, and only when a config service is named. An empty
+// remote_config.base_url is the explicit local-dev opt-out, and a SIGHUP reload
+// never refuses, because by then a snapshot exists.
+func requireWarmDevices(f *config.Fetcher) error {
+	cold := f.Cold()
+	if len(cold) == 0 {
+		return nil
+	}
+	return fmt.Errorf("nothing was ever fetched for %s, so every endpoint would serve "+
+		"zero devices while /healthz said ok. Check the namespace exists and this "+
+		"client may read it; systemd will retry the start",
+		strings.Join(cold, ", "))
 }

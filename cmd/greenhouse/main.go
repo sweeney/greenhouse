@@ -3,7 +3,8 @@
 //
 // Startup: load local config, build the outbound identity TokenSource and the
 // remote-config Fetcher (the devices namespace named by site config, refreshed
-// once with a timeout, fail-open), build the Influx query client, then serve the HTTP API
+// once with a timeout; startup refuses if devices never arrive), build the Influx
+// query client, then serve the HTTP API
 // until SIGINT/SIGTERM. SIGHUP re-refreshes remote config in place without a
 // restart.
 package main
@@ -58,8 +59,10 @@ func main() {
 	// fetcher. The fetcher HOLDS the live device snapshot that the HTTP handlers
 	// query, so we always construct it (even when remote_config.base_url is
 	// empty) to avoid a nil ConfigProvider in the handlers — it then serves an
-	// empty snapshot. Refresh is fail-open: a config-service outage at startup
-	// leaves an empty snapshot rather than aborting the process.
+	// empty snapshot. Refresh is fail-open, with one exception: devices that were
+	// never fetched at all abort startup (requireWarmDevices). At boot there is no
+	// snapshot to fall back to, and an empty one serves zero devices while looking
+	// healthy.
 	tokens := &auth.TokenSource{
 		BaseURL:      cfg.Identity.BaseURL,
 		ClientID:     cfg.Identity.ClientID,
@@ -82,6 +85,11 @@ func main() {
 		refreshCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		fetcher.Refresh(refreshCtx)
 		cancel()
+		if err := requireWarmDevices(fetcher); err != nil {
+			logger.Error("remote config: refusing to start", "error", err,
+				"cold_namespaces", fetcher.Cold())
+			os.Exit(1)
+		}
 	}
 
 	influxClient := influx.New(influx.Config{
@@ -145,7 +153,8 @@ func signalContext() (context.Context, context.CancelFunc) {
 
 // watchSIGHUP re-refreshes the remote-config snapshot on each SIGHUP, without
 // restarting the process. Refresh is fail-open: a failed reload keeps the
-// last-known-good snapshot.
+// last-known-good snapshot. The startup cold check deliberately does not run
+// here: by now a snapshot exists, so a failure is stale, not cold.
 func watchSIGHUP(fetcher *config.Fetcher, logger *slog.Logger) {
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, syscall.SIGHUP)
