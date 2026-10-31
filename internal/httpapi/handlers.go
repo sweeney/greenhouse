@@ -146,7 +146,7 @@ func (s *Server) resolveDeviceFilter(w http.ResponseWriter, r *http.Request) (ma
 	// Candidate set: climate devices only.
 	candidate := make(map[string]config.DeviceConfig)
 	for id, d := range all {
-		if d.ReportsEnvironment() {
+		if config.ReportsEnvironment(d) {
 			candidate[id] = d
 		}
 	}
@@ -178,7 +178,7 @@ func (s *Server) resolveDeviceFilter(w http.ResponseWriter, r *http.Request) (ma
 			writeError(w, http.StatusBadRequest, "unknown device in 'devices': "+id)
 			return nil, false
 		}
-		if !d.ReportsEnvironment() {
+		if !config.ReportsEnvironment(d) {
 			writeError(w, http.StatusBadRequest, "device is not a climate sensor: "+id)
 			return nil, false
 		}
@@ -252,7 +252,7 @@ func (s *Server) resolveDeviceFilter(w http.ResponseWriter, r *http.Request) (ma
 func filterDevicesReportingField(devices map[string]config.DeviceConfig, field string) map[string]config.DeviceConfig {
 	out := make(map[string]config.DeviceConfig, len(devices))
 	for id, d := range devices {
-		if d.MayReportField(field) {
+		if config.MayReportField(d, field) {
 			out[id] = d
 		}
 	}
@@ -393,7 +393,7 @@ func (s *Server) handleDevices(w http.ResponseWriter, _ *http.Request) {
 	out := make([]catalogEntry, 0, len(ids))
 	for _, id := range ids {
 		dev := devices[id]
-		if !dev.ReportsEnvironment() {
+		if !config.ReportsEnvironment(dev) {
 			continue
 		}
 		fields := dev.EnvironmentFields
@@ -491,7 +491,7 @@ func (s *Server) handleDeviceSeries(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !dev.ReportsEnvironment() {
+	if !config.ReportsEnvironment(dev) {
 		writeError(w, http.StatusBadRequest, "device is not a climate sensor")
 		return
 	}
@@ -519,7 +519,7 @@ func (s *Server) handleDeviceSeries(w http.ResponseWriter, r *http.Request) {
 	// that device cannot report is an impossible request, not an empty one.
 	// Answering 200-with-nulls would be indistinguishable from a sensor outage
 	// (null means "no reading"), so say so plainly instead.
-	if !dev.MayReportField(field) {
+	if !config.MayReportField(dev, field) {
 		writeError(w, http.StatusBadRequest,
 			"device "+id+" does not report '"+field+"' (reports: "+strings.Join(dev.EnvironmentFields, ", ")+")")
 		return
@@ -572,7 +572,7 @@ func (s *Server) handleDeviceLatest(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if !dev.ReportsEnvironment() {
+	if !config.ReportsEnvironment(dev) {
 		writeError(w, http.StatusBadRequest, "device is not a climate sensor")
 		return
 	}
@@ -781,7 +781,7 @@ func countDevicesByGroupKey(devices map[string]config.DeviceConfig, groupBy stri
 		// floor must be listed when and only when grouping would produce a
 		// series for it. Counting an appliance probe here would advertise a room
 		// whose grouped series is empty.
-		if !dev.DescribesAmbient() {
+		if !config.DescribesAmbient(dev) {
 			continue
 		}
 		if k := keyOf(dev); k != "" {
