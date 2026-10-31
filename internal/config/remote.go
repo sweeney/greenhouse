@@ -2,12 +2,14 @@ package config
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
 
+	"github.com/sweeney/common/devices"
 	"github.com/sweeney/common/remoteconfig"
 )
 
@@ -222,22 +224,32 @@ func (f *Fetcher) refreshFloorplan(ctx context.Context, c *remoteconfig.Client) 
 	f.tracker.Record(f.FloorplanNamespace, nil)
 }
 
-// refreshDevices needs no nil guard on the decoded map: remoteconfig refuses any
-// body that is not a JSON object, and decoding an object into a nil map always
-// allocates it.
+// refreshDevices decodes the namespace with the shared schema, field by field:
+// a value that does not fit costs that field, not the snapshot. Problems are
+// logged, never refused.
 func (f *Fetcher) refreshDevices(ctx context.Context, c *remoteconfig.Client) {
-	var devices map[string]DeviceConfig
-	if err := c.Get(ctx, f.DevicesNamespace, &devices); err != nil {
+	ns := f.DevicesNamespace
+	var raw json.RawMessage
+	err := c.Get(ctx, ns, &raw)
+	var decoded map[string]DeviceConfig
+	var problems []devices.Problem
+	if err == nil {
+		decoded, problems, err = devices.Decode(raw)
+	}
+	if err != nil {
 		f.warn("remote config: devices namespace unavailable, keeping last-known",
-			"namespace", f.DevicesNamespace, "error", err)
-		f.tracker.Record(f.DevicesNamespace, err)
+			"namespace", ns, "error", err)
+		f.tracker.Record(ns, err)
 		return
 	}
-	normaliseDevices(devices)
+	for _, p := range append(problems, devices.Check(decoded)...) {
+		f.warn("remote config: devices problem", "namespace", ns, "device", p.ID,
+			"field", p.Field, "code", p.Code, "problem", p.Message)
+	}
 	f.mu.Lock()
-	f.devices = devices
+	f.devices = decoded
 	f.mu.Unlock()
-	f.tracker.Record(f.DevicesNamespace, nil)
+	f.tracker.Record(ns, nil)
 }
 
 func (f *Fetcher) warn(msg string, args ...any) {

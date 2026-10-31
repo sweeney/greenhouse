@@ -130,7 +130,7 @@ func TestRoomConfig_NamesAreNotUnique(t *testing.T) {
 	}
 }
 
-// The map key is authoritative, mirroring normaliseFloors and normaliseDevices.
+// The map key is authoritative, mirroring normaliseFloors.
 func TestNormaliseRooms_FillsIDFromKey(t *testing.T) {
 	rooms := map[string]RoomConfig{"floor1.room-a": {Name: "Room A"}}
 	normaliseRooms(rooms)

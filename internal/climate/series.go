@@ -452,7 +452,7 @@ func assembleByDevice(
 	var out []Series
 	for _, id := range sortedDeviceIDs(devices) {
 		d := devices[id]
-		if !d.ReportsEnvironment() {
+		if !config.ReportsEnvironment(d) {
 			continue
 		}
 		label := d.DisplayName
@@ -513,7 +513,7 @@ func CircularGroupConflict(field, groupBy string, devices map[string]config.Devi
 		// COMBINE, and an appliance probe is never combined (DescribesAmbient).
 		// Counting one would 400 a request that group_by is about to answer
 		// with a single bearing passed through untouched.
-		if !d.DescribesAmbient() {
+		if !config.DescribesAmbient(d) {
 			continue
 		}
 		if k := keyOf(d); k != "" {
@@ -571,7 +571,7 @@ func assembleByGroup(
 		// reports an appliance interior, so averaging it in would move a room's
 		// mean toward a freezer's setpoint — see config.ambientClasses. Probes
 		// are reached by group_by=device.
-		if !d.DescribesAmbient() {
+		if !config.DescribesAmbient(d) {
 			continue
 		}
 		place := keyOf(d)
@@ -721,7 +721,7 @@ func sortedDeviceIDs(devices map[string]config.DeviceConfig) []string {
 func environmentalIDs(devices map[string]config.DeviceConfig) []string {
 	var out []string
 	for _, id := range sortedDeviceIDs(devices) {
-		if devices[id].ReportsEnvironment() {
+		if config.ReportsEnvironment(devices[id]) {
 			out = append(out, id)
 		}
 	}

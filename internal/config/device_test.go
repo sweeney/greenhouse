@@ -5,6 +5,15 @@ import (
 	"testing"
 )
 
+// normaliseAll applies the shared schema's legacy fold, which the fetcher gets
+// from devices.Decode. These tests pin what greenhouse relies on from it.
+func normaliseAll(m map[string]DeviceConfig) {
+	for id, d := range m {
+		d.Normalise()
+		m[id] = d
+	}
+}
+
 func TestNormaliseDevicesLegacyShorthand(t *testing.T) {
 	devices := map[string]DeviceConfig{
 		"probe_a": {
@@ -13,7 +22,7 @@ func TestNormaliseDevicesLegacyShorthand(t *testing.T) {
 			Class:        "environmental_sensor",
 		},
 	}
-	normaliseDevices(devices)
+	normaliseAll(devices)
 	d := devices["probe_a"]
 	if d.Scheme != "zigbee" {
 		t.Errorf("scheme = %q, want zigbee", d.Scheme)
@@ -36,7 +45,7 @@ func TestNormaliseDevicesDoesNotOverrideCanonical(t *testing.T) {
 			FriendlyName: "Legacy Name",
 		},
 	}
-	normaliseDevices(devices)
+	normaliseAll(devices)
 	d := devices["outdoor_station"]
 	if d.Scheme != "tasmota" {
 		t.Errorf("scheme = %q, want tasmota preserved", d.Scheme)
@@ -53,7 +62,7 @@ func TestNormaliseDevicesNoLegacyFields(t *testing.T) {
 	devices := map[string]DeviceConfig{
 		"sensor_a": {Class: "environmental_sensor"},
 	}
-	normaliseDevices(devices)
+	normaliseAll(devices)
 	d := devices["sensor_a"]
 	if d.Scheme != "" {
 		t.Errorf("scheme = %q, want empty (no legacy fields to imply zigbee)", d.Scheme)
@@ -87,7 +96,7 @@ func TestReportsEnvironment(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			d := DeviceConfig{Class: tt.class}
-			if got := d.ReportsEnvironment(); got != tt.want {
+			if got := ReportsEnvironment(d); got != tt.want {
 				t.Errorf("ReportsEnvironment() for class %q = %v, want %v", tt.class, got, tt.want)
 			}
 		})
@@ -100,12 +109,12 @@ func TestReportsEnvironment(t *testing.T) {
 // environment_fields, this test is the one that should change.
 func TestReportsEnvironment_IgnoresEnvironmentFields(t *testing.T) {
 	d := DeviceConfig{Class: "continuous_power_device", EnvironmentFields: []string{"temperature_c"}}
-	if d.ReportsEnvironment() {
+	if ReportsEnvironment(d) {
 		t.Error("a non-climate class with environment_fields must not be charted under the class allowlist")
 	}
 	// ...and conversely, a climate class with no hint is still charted.
 	d = DeviceConfig{Class: "fire_alarm"}
-	if !d.ReportsEnvironment() {
+	if !ReportsEnvironment(d) {
 		t.Error("a climate class must be charted even without an environment_fields hint")
 	}
 }
@@ -138,10 +147,10 @@ func TestMayReportField(t *testing.T) {
 		Class:             "environmental_sensor",
 		EnvironmentFields: []string{"temperature_c", "humidity_pct"},
 	}
-	if !declared.MayReportField("temperature_c") {
+	if !MayReportField(declared, "temperature_c") {
 		t.Error("a declared field must be reportable")
 	}
-	if declared.MayReportField("rainfall_mm") {
+	if MayReportField(declared, "rainfall_mm") {
 		t.Error("a field outside an explicit declaration must not be reportable")
 	}
 
@@ -150,14 +159,14 @@ func TestMayReportField(t *testing.T) {
 	// readings — see the doc comment on MayReportField.
 	undeclared := DeviceConfig{Class: "environmental_sensor"}
 	for _, f := range []string{"temperature_c", "rainfall_mm", "uv_index"} {
-		if !undeclared.MayReportField(f) {
+		if !MayReportField(undeclared, f) {
 			t.Errorf("undeclared coverage must permit %q", f)
 		}
 	}
 
 	// An explicitly empty (non-nil) list is still "no declaration".
 	empty := DeviceConfig{Class: "environmental_sensor", EnvironmentFields: []string{}}
-	if !empty.MayReportField("rainfall_mm") {
+	if !MayReportField(empty, "rainfall_mm") {
 		t.Error("an empty list must behave as undeclared, not as 'reports nothing'")
 	}
 }
@@ -218,7 +227,7 @@ func TestDeviceConfig_FloorWithoutRoom(t *testing.T) {
 
 func TestReportsEnvironment_ChartsTheClimateClasses(t *testing.T) {
 	for _, class := range []string{"environmental_sensor", "fire_alarm", "appliance_probe"} {
-		if !(DeviceConfig{Class: class}).ReportsEnvironment() {
+		if !ReportsEnvironment(DeviceConfig{Class: class}) {
 			t.Errorf("%s must be charted by greenhouse", class)
 		}
 	}
@@ -226,7 +235,7 @@ func TestReportsEnvironment_ChartsTheClimateClasses(t *testing.T) {
 
 func TestReportsEnvironment_ExcludesNonClimateClasses(t *testing.T) {
 	for _, class := range []string{"continuous_power_device", "cycle_power_device", "energy_meter", "ups_sensor", ""} {
-		if (DeviceConfig{Class: class}).ReportsEnvironment() {
+		if ReportsEnvironment(DeviceConfig{Class: class}) {
 			t.Errorf("%s writes no environmental telemetry and must not be charted", class)
 		}
 	}
@@ -235,17 +244,17 @@ func TestReportsEnvironment_ExcludesNonClimateClasses(t *testing.T) {
 // The split itself: a probe is charted, but never averaged into a room.
 func TestApplianceProbeIsChartedButNotAmbient(t *testing.T) {
 	d := DeviceConfig{Class: "appliance_probe"}
-	if !d.ReportsEnvironment() {
+	if !ReportsEnvironment(d) {
 		t.Error("an appliance_probe reports temperature_c and must be chartable")
 	}
-	if d.DescribesAmbient() {
+	if DescribesAmbient(d) {
 		t.Error("an appliance_probe measures an appliance interior; combining it into a room mean reports an ambient temperature nothing in the room would show")
 	}
 }
 
 func TestDescribesAmbient_TheRoomDescribingClasses(t *testing.T) {
 	for _, class := range []string{"environmental_sensor", "fire_alarm"} {
-		if !(DeviceConfig{Class: class}).DescribesAmbient() {
+		if !DescribesAmbient(DeviceConfig{Class: class}) {
 			t.Errorf("%s measures room air and must contribute to a room or floor statistic", class)
 		}
 	}
@@ -265,7 +274,7 @@ func TestAmbientClassesIsASubsetOfClimateClasses(t *testing.T) {
 // A device that is never charted is never ambient either, whatever its room.
 func TestDescribesAmbient_ExcludesNonClimateClasses(t *testing.T) {
 	for _, class := range []string{"continuous_power_device", "energy_meter", ""} {
-		if (DeviceConfig{Class: class}).DescribesAmbient() {
+		if DescribesAmbient(DeviceConfig{Class: class}) {
 			t.Errorf("%s must not contribute to a room or floor statistic", class)
 		}
 	}

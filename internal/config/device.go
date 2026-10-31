@@ -1,107 +1,29 @@
 package config
 
-import "time"
+import "github.com/sweeney/common/devices"
 
-// Thresholds describes the per-class activity detection thresholds.
-// Greenhouse does not use thresholds itself, but the struct is mirrored
-// from statehouse so that DeviceConfig fetched from the shared
-// `statehouse_devices` namespace round-trips cleanly. All fields are
-// pointers so that an explicitly-set zero value is honoured.
-type Thresholds struct {
-	IdleBelowW           *float64       `yaml:"idle_below_w"            json:"-"`
-	ActiveAboveW         *float64       `yaml:"active_above_w"          json:"-"`
-	ActiveSustainedFor   *time.Duration `yaml:"active_sustained_for"    json:"-"`
-	InactiveSustainedFor *time.Duration `yaml:"inactive_sustained_for"  json:"-"`
-	CompressorAboveW     *float64       `yaml:"compressor_above_w"      json:"-"`
-}
+// DeviceConfig is one device in the site's devices namespace: the shared
+// schema in common/devices. Greenhouse reads Class, Room (via Place), Floor,
+// DisplayName, TargetTemperature and EnvironmentFields.
+//
+// TargetTemperature is relayed as the number and nothing more: absent is
+// UNKNOWN (null), never a guess from the class or name, and how far from
+// target is acceptable is each client's policy, not a fact about the device.
+//
+// EnvironmentFields is an optional hint naming the fields a device writes to
+// `device_environment`. When absent, greenhouse falls back to the full field
+// registry (see MayReportField), so populating it is what makes /devices
+// honest about what each sensor offers.
+type DeviceConfig = devices.Device
 
-// DeviceConfig mirrors statehouse's device entry. Greenhouse reads only
-// Class, Room (via Place) and DisplayName (to find climate devices and group series
-// by location), but the full struct is kept so the shared `statehouse_devices`
-// namespace parses without loss. The canonical identity fields are
-// Scheme + Primary (and Display); the legacy `ieee_address` /
-// `friendly_name` fields are Z2M shorthand that normaliseDevices folds in.
-type DeviceConfig struct {
-	// Canonical identity fields. Scheme names the adapter that owns the
-	// device ("zigbee", "tasmota", "shelly", ...). Primary is the
-	// adapter's stable identifier. Display is the human-readable name.
-	Scheme  string `yaml:"scheme"   json:"scheme,omitempty"`
-	Primary string `yaml:"primary"  json:"primary,omitempty"`
-	Display string `yaml:"display"  json:"display,omitempty"`
+// Thresholds are statehouse's activity thresholds, part of the shared schema.
+// Greenhouse does not use them.
+type Thresholds = devices.Thresholds
 
-	// Legacy Z2M shorthand. normaliseDevices converts these to
-	// scheme=zigbee + primary=ieee_address / display=friendly_name.
-	IEEEAddress  string `yaml:"ieee_address"   json:"ieee_address,omitempty"`
-	FriendlyName string `yaml:"friendly_name"  json:"friendly_name,omitempty"`
-
-	Class       string      `yaml:"class"            json:"class,omitempty"`
-	DisplayName string      `yaml:"display_name"     json:"display_name,omitempty"`
-	Thresholds  *Thresholds `yaml:"thresholds"       json:"thresholds,omitempty"`
-
-	// Room is the floorplan room id this device sits in, e.g.
-	// "floor2.room-a". It replaces Location.
-	Room string `yaml:"room" json:"room,omitempty"`
-
-	// Floor is the floor this device sits on, e.g. "floor2". The devices
-	// namespace declares it as a first-class property alongside Room, so
-	// greenhouse reads it rather than deriving it from the room id: the
-	// floorplan owns the fact, and re-deriving it here would be a second
-	// implementation of someone else's taxonomy that silently disagrees the
-	// moment a room id is spelled unexpectedly.
-	//
-	// Empty means the namespace did not declare one, which greenhouse treats as
-	// UNKNOWN rather than guessing: an undeclared floor is never matched by the
-	// floors= filter and is reported as "" by the device catalog.
-	Floor string `yaml:"floor" json:"floor,omitempty"`
-
-	// Location is the free-text place the device used to declare, and is
-	// DEPRECATED. It conflated at least five different things — a floor, a room,
-	// a renamed room, and the scope a reading describes — which is why the
-	// floorplan taxonomy exists.
-	//
-	// It is still decoded because the namespace and its consumers migrate
-	// independently: a devices namespace that has not been republished yet still
-	// carries `location`, and greenhouse must keep working against it.
-	Location string `yaml:"location" json:"location,omitempty"`
-
-	// EnergyStrategy is mirrored for completeness so the shared namespace
-	// round-trips; greenhouse never reads it (it is an energy concern).
-	EnergyStrategy string `yaml:"energy_strategy" json:"energy_strategy,omitempty"`
-
-	// TargetTemperature is the temperature this device is meant to be holding,
-	// in °C, as the namespace declares it — the setpoint of a fridge, a freezer
-	// or a wine cooler, beside the appliance_probe that measures whether it is
-	// actually being held.
-	//
-	// It is a POINTER because 0 °C is a real target and an absent key is not a
-	// target of zero. Absent means the namespace declares none, which greenhouse
-	// reports as UNKNOWN (null) rather than inventing one from the class or the
-	// display name — the same rule Floor follows.
-	//
-	// greenhouse relays the number and nothing more. It does not turn it into a
-	// tolerance band, an in-range flag or a breach count: how far from target is
-	// acceptable, and in which direction, is a per-client policy question, not a
-	// fact about the device — a freezer above target is a food-safety problem
-	// while a wine cooler a degree either side is a matter of taste. This is the
-	// rule roomEntry.Category already follows by relaying the floorplan's
-	// category raw instead of reducing it to an is_living_space flag.
-	TargetTemperature *float64 `yaml:"target_temperature" json:"target_temperature,omitempty"`
-
-	// EnvironmentFields, when present in the namespace, lists the fields this
-	// device actually writes to the `device_environment` measurement (e.g.
-	// ["humidity_pct","temperature_c"]). Named for that measurement rather
-	// than a bare "fields": statehouse_devices is a SHARED namespace, so a
-	// generic key would be ambiguous the moment a sibling service wants to
-	// declare its own per-device field list.
-	//
-	// It is an optional hint. When absent, greenhouse falls back to the full
-	// field registry for the device catalog, which over-advertises: an indoor
-	// sensor reporting only temperature and humidity would appear to offer
-	// rainfall and UV, and a series request for one of those returns 200 with
-	// all-null buckets — indistinguishable from a sensor outage. Populating
-	// this key in the namespace is what makes /devices honest.
-	EnvironmentFields []string `yaml:"environment_fields" json:"environment_fields,omitempty"`
-}
+// CoverageHouse is the legacy `location` value meaning a device's readings
+// describe the whole property rather than the room it sits in. Resolving it as
+// a room would key a series on `house`, a reserved series key.
+const CoverageHouse = devices.CoverageHouse
 
 // climateClasses are the statehouse device classes whose members write
 // environmental telemetry to the `device_environment` measurement, and which
@@ -159,13 +81,13 @@ var climateClasses = map[string]struct{}{
 //
 // So the two predicates split the question that used to be one:
 //
-//	ReportsEnvironment() — may this device be charted at all?  (catalog,
+//	ReportsEnvironment — may this device be charted at all?  (catalog,
 //	                       devices=, /devices/{id}/*, group_by=device)
-//	DescribesAmbient()   — may its reading be COMBINED with its neighbours'?
+//	DescribesAmbient   — may its reading be COMBINED with its neighbours'?
 //	                       (group_by=room, group_by=floor, /rooms, /floors)
 //
 // This is NOT a per-package class const of the kind the allowlist replaced —
-// both maps live here and are reached only through the two methods below, so
+// both maps live here and are reached only through the two functions below, so
 // the climate and httpapi packages still agree by construction.
 //
 // A class absent from climateClasses is not charted at all, so listing it here
@@ -175,31 +97,6 @@ var ambientClasses = map[string]struct{}{
 	"fire_alarm":           {},
 }
 
-// Place returns the room this device is grouped and filtered by: its Room when the
-// namespace has been migrated, otherwise its deprecated Location.
-//
-// Every grouping and filtering path goes through this one function, which is what
-// makes `room`/`rooms=` and `location`/`locations=` return identical numbers during
-// the alias period instead of merely being documented to.
-func (d DeviceConfig) Place() string {
-	if d.Room != "" {
-		return d.Room
-	}
-	if d.Location == CoverageHouse {
-		return ""
-	}
-	return d.Location
-}
-
-// CoverageHouse is the legacy `location` value meaning a device's readings describe
-// the whole property rather than the room it sits in.
-//
-// That field carried two different facts — usually a place, but `house` was always a
-// scope — which is the conflation the floorplan migration removes. Resolving it as a
-// room would key a series on `house`, which the taxonomy forbids as a room id: it is
-// a reserved series key.
-const CoverageHouse = "house"
-
 // ReportsEnvironment reports whether greenhouse charts this device — i.e.
 // whether its class writes to the `device_environment` measurement. It is the
 // predicate behind the device catalog, the series device set, the
@@ -207,7 +104,7 @@ const CoverageHouse = "house"
 //
 // It answers "may this be charted", NOT "may this be averaged with its
 // neighbours" — see DescribesAmbient, which is the narrower question.
-func (d DeviceConfig) ReportsEnvironment() bool {
+func ReportsEnvironment(d DeviceConfig) bool {
 	_, ok := climateClasses[d.Class]
 	return ok
 }
@@ -226,7 +123,7 @@ func (d DeviceConfig) ReportsEnvironment() bool {
 // appliance interior rather than a room — averaging a freezer probe into its
 // kitchen reports an ambient temperature nothing in that room would measure.
 // See ambientClasses for the full reasoning.
-func (d DeviceConfig) DescribesAmbient() bool {
+func DescribesAmbient(d DeviceConfig) bool {
 	_, ok := ambientClasses[d.Class]
 	return ok
 }
@@ -243,7 +140,7 @@ func (d DeviceConfig) DescribesAmbient() bool {
 //
 // This mirrors the catalog's registry fallback: no declaration means "we don't
 // know", and greenhouse does not block on what it does not know.
-func (d DeviceConfig) MayReportField(field string) bool {
+func MayReportField(d DeviceConfig, field string) bool {
 	if len(d.EnvironmentFields) == 0 {
 		return true
 	}
@@ -253,22 +150,4 @@ func (d DeviceConfig) MayReportField(field string) bool {
 		}
 	}
 	return false
-}
-
-// normaliseDevices converts legacy ieee_address/friendly_name shorthands
-// into the canonical scheme/primary/display fields. Mirrors statehouse so
-// devices fetched from the remote namespace are normalised identically.
-func normaliseDevices(devices map[string]DeviceConfig) {
-	for id, d := range devices {
-		if d.Scheme == "" && (d.IEEEAddress != "" || d.FriendlyName != "") {
-			d.Scheme = "zigbee"
-		}
-		if d.Primary == "" && d.IEEEAddress != "" {
-			d.Primary = d.IEEEAddress
-		}
-		if d.Display == "" && d.FriendlyName != "" {
-			d.Display = d.FriendlyName
-		}
-		devices[id] = d
-	}
 }

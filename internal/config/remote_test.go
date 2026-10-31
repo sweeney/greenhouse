@@ -62,7 +62,7 @@ func TestFetcher_RefreshPopulatesSnapshot(t *testing.T) {
 	mux := http.NewServeMux()
 	serveNamespace(mux, testNamespace, map[string]any{
 		"probe_a": map[string]any{
-			// Legacy Z2M shorthand: normaliseDevices folds these into
+			// Legacy Z2M shorthand: the shared Decode folds these into
 			// scheme=zigbee, primary=ieee_address, display=friendly_name.
 			"ieee_address":  "0xaabbccddeeff0011",
 			"friendly_name": "Glow Sensor",
