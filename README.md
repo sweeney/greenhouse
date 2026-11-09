@@ -36,8 +36,8 @@ A token's `aud` is checked against `greenhouse` under `http.audience_check`:
 `enforce` (the default) answers a token that does not name greenhouse `401`;
 `warn` accepts it and logs `token would be rejected by audience enforcement`
 with its subject and audience; `off` does neither. An unknown value refuses to
-start. Warn ran as the default from 30 Oct 2026 and logged no caller, so the
-default is now enforce. If a forgotten caller turns up, set
+start. Warn ran in production first (#39) and logged no caller, so the default
+is now enforce. If a forgotten caller turns up, set
 `audience_check: warn` in `/etc/greenhouse/config.yaml` and restart: no rebuild
 needed. User tokens from id.swee.net already carry `greenhouse` in `aud`; a
 service (`client_credentials`) token needs its client registered for it. A token that could not be *checked*, because identity's signing keys are
@@ -194,9 +194,9 @@ environmental telemetry:
 - `appliance_probe` — any temperature probe that measures the **inside of an
   appliance**: a fridge, a freezer or a wine cooler, or a hot water cylinder
   (one probe per position up the tank). How a probe is mounted is not part of
-  the definition; fridge and freezer probes happen to be potted in thermal
-  ballast, so they track contents temperature rather than air and a door
-  opening does not read as a spike.
+  the definition. The fridge, freezer and wine cooler probes are potted in
+  thermal ballast, so they track contents temperature rather than air and a
+  door opening does not read as a spike.
 
 `class` is reported as-is on `/devices`, so a consumer can tell a purpose-built
 sensor from an alarm or a probe and weight them differently if it wants to.
@@ -261,7 +261,14 @@ per-client policy question rather than a fact about the device: a freezer above
 target is a food-safety problem, a wine cooler a degree either side is a matter
 of taste. Hot water cylinder probes may carry a `target_temperature` too, relayed
 the same way: what counts as too cold for stored hot water is the consumer's
-policy, not greenhouse's. This is the same rule `/rooms` follows by relaying
+policy, not greenhouse's.
+
+A cylinder is stratified: cold at the bottom by design. So `devices_home` should
+declare a cylinder's target only on the probe(s) where it applies, typically the
+thermostat or top position, not copy it onto every position. A target copied
+onto the lower probes would make them read as permanently in breach to any
+consumer that compares reading with target. greenhouse relays whatever is
+declared and does not check this. This is the same rule `/rooms` follows by relaying
 `category` raw instead of reducing it to an `is_living_space` flag.
 
 ### The `environment_fields` hint

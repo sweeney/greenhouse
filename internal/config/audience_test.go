@@ -7,8 +7,8 @@ import (
 
 const audienceBase = "site:\n  id: home\n  devices_namespace: devices_home\n"
 
-// Enforce is the default: warn ran in production from 30 Oct 2026 and logged
-// no caller that enforcing would lock out (#39). warn and off stay available
+// Enforce is the default: warn ran in production first and logged no caller
+// that enforcing would lock out (#39). warn and off stay available
 // as an explicit setting, for a rollback without a rebuild.
 func TestLoadDefaultsAudienceCheckToEnforce(t *testing.T) {
 	cfg, err := Load(writeConfig(t, audienceBase))

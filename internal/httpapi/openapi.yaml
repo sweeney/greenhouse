@@ -965,6 +965,11 @@ components:
             a wine cooler or a hot water cylinder, beside the appliance_probe
             that measures whether it is actually being held. `null` when the namespace declares none.
 
+            A hot water cylinder is stratified, cold at the bottom by design, so
+            its target belongs only on the probe(s) where it applies (typically
+            the thermostat or top position). Lower position probes normally
+            declare none. greenhouse relays whatever is declared.
+
             Nullable rather than defaulted, and always present: 0 °C is a real
             target, so an absent key cannot be reported as zero. A consumer reads
             null as "no target published" rather than inferring it from a missing

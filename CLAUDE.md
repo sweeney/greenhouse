@@ -47,8 +47,9 @@ transport is shared already, in `sweeney/common/remoteconfig`.
     `/rooms` and `/floors` catalogs that advertise that vocabulary.
 
   An `appliance_probe` is any probe measuring the inside of an appliance: a fridge, a freezer, a
-  wine cooler, or a hot water cylinder (tanktemp, one probe per position). Ballast is one way of
-  mounting a probe, not part of the definition. It writes `temperature_c` like any TH sensor, so
+  wine cooler, or a hot water cylinder (tanktemp, one probe per position). How a probe is mounted is
+  not part of the definition: the fridge, freezer and wine cooler probes are potted in thermal
+  ballast. It writes `temperature_c` like any TH sensor, so
   greenhouse charts it — but it measures an appliance interior, and its room is necessarily the
   appliance's room, so combining it reports an ambient temperature nothing in that room would
   measure (a 60 °C cylinder no more than a −19 °C freezer). The namespace may also name the

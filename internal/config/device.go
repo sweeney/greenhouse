@@ -72,8 +72,9 @@ var climateClasses = map[string]struct{}{
 // It is a subset of climateClasses, and the gap between the two is the whole
 // point. An `appliance_probe` is any temperature probe that measures the INSIDE
 // of an appliance — a fridge, a freezer, a wine cooler, or a hot water cylinder
-// (tanktemp, one probe per position). Thermal ballast is how the fridge probes
-// are mounted, not part of the definition. It reports temperature_c like any
+// (tanktemp, one probe per position). How a probe is mounted is not part of the
+// definition: the fridge, freezer and wine cooler probes are potted in thermal
+// ballast. It reports temperature_c like any
 // TH sensor, so greenhouse charts it, but it measures an appliance interior. The
 // probe's room is necessarily the appliance's room, so a naive group_by=room
 // over every climate device averages a -19 °C freezer interior into the kitchen
