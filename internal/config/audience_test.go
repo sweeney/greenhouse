@@ -7,15 +7,16 @@ import (
 
 const audienceBase = "site:\n  id: home\n  devices_namespace: devices_home\n"
 
-// Warn is the default: it changes only logging, so it can ship before anyone
-// has read the warnings, and moving to enforce is a reviewed change in git.
-func TestLoadDefaultsAudienceCheckToWarn(t *testing.T) {
+// Enforce is the default: warn ran in production first and logged no caller
+// that enforcing would lock out (#39). warn and off stay available
+// as an explicit setting, for a rollback without a rebuild.
+func TestLoadDefaultsAudienceCheckToEnforce(t *testing.T) {
 	cfg, err := Load(writeConfig(t, audienceBase))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.HTTP.AudienceCheck != AudienceWarn {
-		t.Errorf("AudienceCheck = %q, want %q", cfg.HTTP.AudienceCheck, AudienceWarn)
+	if cfg.HTTP.AudienceCheck != AudienceEnforce {
+		t.Errorf("AudienceCheck = %q, want %q", cfg.HTTP.AudienceCheck, AudienceEnforce)
 	}
 }
 
