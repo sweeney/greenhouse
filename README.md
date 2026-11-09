@@ -191,12 +191,19 @@ environmental telemetry:
   smoke state. They are included because some rooms hold **no
   `environmental_sensor` at all**, so without them those rooms have no climate
   coverage despite live data in Influx.
-- `appliance_probe` — temperature probes potted in thermal ballast **inside** a
-  fridge, a freezer or a wine cooler, so they track contents temperature rather
-  than air and a door opening does not read as a spike.
+- `appliance_probe` — any temperature probe that measures the **inside of an
+  appliance**: a fridge, a freezer or a wine cooler, or a hot water cylinder
+  (one probe per position up the tank). How a probe is mounted is not part of
+  the definition; fridge and freezer probes happen to be potted in thermal
+  ballast, so they track contents temperature rather than air and a door
+  opening does not read as a spike.
 
 `class` is reported as-is on `/devices`, so a consumer can tell a purpose-built
 sensor from an alarm or a probe and weight them differently if it wants to.
+The devices namespace can also declare `part_of` on a probe, naming the
+appliance it is inside (`sweeney/common/devices` v0.2.0). greenhouse does not
+read or relay `part_of` yet, so on `/devices` `class` is the only handle for
+telling a probe from an ambient sensor.
 
 #### Charted is not the same as ambient
 
@@ -212,8 +219,9 @@ appliance's room. So greenhouse asks two questions, not one:
 `ambientClasses` is a strict subset of `climateClasses`, and today the gap is
 exactly `appliance_probe`. A probe is therefore charted by `group_by=device`
 and **excluded from every room and floor statistic**: averaging a −19 °C freezer
-probe into its kitchen would report an ambient temperature no thermometer in
-that room would show. statehouse's `ClassApplianceProbe` comment names this as
+probe into its kitchen, or a 60 °C hot water cylinder probe into its airing
+cupboard, would report an ambient temperature no thermometer in that room would
+show. statehouse's `ClassApplianceProbe` comment names this as
 the reason the class exists at all.
 
 Two consequences worth stating plainly:
@@ -251,8 +259,10 @@ greenhouse relays the **number and nothing else** — no tolerance, no in-range
 flag, no breach count. How far off target matters, and in which direction, is a
 per-client policy question rather than a fact about the device: a freezer above
 target is a food-safety problem, a wine cooler a degree either side is a matter
-of taste. This is the same rule `/rooms` follows by relaying `category` raw
-instead of reducing it to an `is_living_space` flag.
+of taste. Hot water cylinder probes may carry a `target_temperature` too, relayed
+the same way: what counts as too cold for stored hot water is the consumer's
+policy, not greenhouse's. This is the same rule `/rooms` follows by relaying
+`category` raw instead of reducing it to an `is_living_space` flag.
 
 ### The `environment_fields` hint
 

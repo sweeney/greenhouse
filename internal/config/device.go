@@ -34,8 +34,9 @@ const CoverageHouse = devices.CoverageHouse
 // hold NO environmental_sensor at all, so without them those two rooms have no
 // climate coverage despite live data sitting in Influx.
 //
-// `appliance_probe` is here because the probes write temperature_c exactly as
-// the TH sensors do — but what they describe is an appliance interior, not the
+// `appliance_probe` (fridge, freezer, wine cooler and hot water cylinder
+// probes) is here because the probes write temperature_c exactly as the TH
+// sensors do — but what they describe is an appliance interior, not the
 // air in the room, so it is NOT in ambientClasses below. See that map.
 //
 // KNOWN LIMITATION — this is a deliberate, documented trade-off:
@@ -69,12 +70,19 @@ var climateClasses = map[string]struct{}{
 // ROOM, and which may therefore be combined into a room or floor statistic.
 //
 // It is a subset of climateClasses, and the gap between the two is the whole
-// point. An `appliance_probe` is a temperature probe potted in thermal ballast
-// INSIDE a fridge, a freezer or a wine cooler: it reports temperature_c like any
+// point. An `appliance_probe` is any temperature probe that measures the INSIDE
+// of an appliance — a fridge, a freezer, a wine cooler, or a hot water cylinder
+// (tanktemp, one probe per position). Thermal ballast is how the fridge probes
+// are mounted, not part of the definition. It reports temperature_c like any
 // TH sensor, so greenhouse charts it, but it measures an appliance interior. The
 // probe's room is necessarily the appliance's room, so a naive group_by=room
 // over every climate device averages a -19 °C freezer interior into the kitchen
-// and reports an ambient temperature no thermometer in that room would show.
+// (or a 60 °C cylinder into its cupboard) and reports an ambient temperature no
+// thermometer in that room would show.
+//
+// The namespace may also name the appliance with `part_of` (common/devices
+// v0.2.0). greenhouse does not read it yet; class is the handle used here, and
+// "does this describe the room's air" stays a class question either way.
 // statehouse's own class comment (device/profiles.go, ClassApplianceProbe) names
 // this as the reason the class exists: "Consumers aggregating ambient conditions
 // by room need to exclude these."
@@ -120,8 +128,9 @@ func ReportsEnvironment(d DeviceConfig) bool {
 // everywhere else.
 //
 // The class it excludes is `appliance_probe`, whose readings are of an
-// appliance interior rather than a room — averaging a freezer probe into its
-// kitchen reports an ambient temperature nothing in that room would measure.
+// appliance interior rather than a room — averaging a freezer or hot water
+// cylinder probe into its room reports an ambient temperature nothing in that
+// room would measure.
 // See ambientClasses for the full reasoning.
 func DescribesAmbient(d DeviceConfig) bool {
 	_, ok := ambientClasses[d.Class]

@@ -46,17 +46,21 @@ transport is shared already, in `sweeney/common/remoteconfig`.
     devices' readings are about to be averaged — `group_by=room`, `group_by=floor`, and the
     `/rooms` and `/floors` catalogs that advertise that vocabulary.
 
-  An `appliance_probe` is a probe potted inside a fridge, a freezer or a wine cooler. It writes
-  `temperature_c` like any TH sensor, so greenhouse charts it — but it measures an appliance
-  interior, and its room is necessarily the appliance's room, so combining it reports an ambient
-  temperature nothing in that room would measure. statehouse's `ClassApplianceProbe` comment names
+  An `appliance_probe` is any probe measuring the inside of an appliance: a fridge, a freezer, a
+  wine cooler, or a hot water cylinder (tanktemp, one probe per position). Ballast is one way of
+  mounting a probe, not part of the definition. It writes `temperature_c` like any TH sensor, so
+  greenhouse charts it — but it measures an appliance interior, and its room is necessarily the
+  appliance's room, so combining it reports an ambient temperature nothing in that room would
+  measure (a 60 °C cylinder no more than a −19 °C freezer). The namespace may also name the
+  appliance via `part_of` (common/devices v0.2.0); greenhouse does not act on it yet, so `class`
+  is still the only handle it uses. statehouse's `ClassApplianceProbe` comment names
   this as the reason the class exists. Known limitation, documented at the map: class asserts
   "every device of this class reports environment telemetry", so a future non-reporting model
   would yield an empty series until someone edits and deploys. The alternative (select on
   `environment_fields`) is a one-predicate change — but it would only replace `climateClasses`;
   "does this describe the room's air" is not a fact `environment_fields` carries.
 - **Config facts are relayed RAW, never reduced to a verdict.** `target_temperature`
-  (the °C an appliance should be holding, beside its `appliance_probe`) is published by
+  (the °C an appliance should be holding, beside its `appliance_probe` — cylinder probes included) is published by
   `/devices` as a nullable number and nothing more — no tolerance, no in-range flag, no
   breach count. How far off target matters, and in which direction, is the consumer's
   policy, not a fact about the device. Same rule as `/rooms` relaying `category` rather
