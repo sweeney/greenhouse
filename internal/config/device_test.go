@@ -233,8 +233,12 @@ func TestReportsEnvironment_ChartsTheClimateClasses(t *testing.T) {
 	}
 }
 
+// hot_water_cylinder is listed because, since common/devices v0.2.0, a cylinder
+// declared telemetry:false no longer warns identity_missing (#47). If the class
+// ever joined an allowlist, /devices would list a device that sends nothing and
+// its series would always be empty, with no log line to point at it.
 func TestReportsEnvironment_ExcludesNonClimateClasses(t *testing.T) {
-	for _, class := range []string{"continuous_power_device", "cycle_power_device", "energy_meter", "ups_sensor", ""} {
+	for _, class := range []string{"continuous_power_device", "cycle_power_device", "energy_meter", "ups_sensor", "hot_water_cylinder", ""} {
 		if ReportsEnvironment(DeviceConfig{Class: class}) {
 			t.Errorf("%s writes no environmental telemetry and must not be charted", class)
 		}
@@ -273,7 +277,7 @@ func TestAmbientClassesIsASubsetOfClimateClasses(t *testing.T) {
 
 // A device that is never charted is never ambient either, whatever its room.
 func TestDescribesAmbient_ExcludesNonClimateClasses(t *testing.T) {
-	for _, class := range []string{"continuous_power_device", "energy_meter", ""} {
+	for _, class := range []string{"continuous_power_device", "energy_meter", "hot_water_cylinder", ""} {
 		if DescribesAmbient(DeviceConfig{Class: class}) {
 			t.Errorf("%s must not contribute to a room or floor statistic", class)
 		}

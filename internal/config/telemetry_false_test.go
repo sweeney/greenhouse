@@ -46,12 +46,30 @@ func TestFetcher_TelemetryFalseEntryDoesNotWarnIdentityMissing(t *testing.T) {
 		t.Errorf("the cylinder and its probe are well-formed and must log no devices problem; got:\n%s", out)
 	}
 
-	probe, ok := f.Devices()["hw_cylinder_top"]
+	// The log checks above only mean something if the cylinder was decoded and
+	// its telemetry:false read: an entry Decode dropped would log nothing too.
+	got := f.Devices()
+	cyl, ok := got["hw_cylinder"]
+	if !ok {
+		t.Fatal("hw_cylinder missing after refresh")
+	}
+	if cyl.SendsTelemetry() {
+		t.Errorf("hw_cylinder: telemetry:false not decoded; got %v", cyl.Telemetry)
+	}
+	if cyl.PartOf != "" {
+		t.Errorf("hw_cylinder: part_of = %q, want none", cyl.PartOf)
+	}
+	if ReportsEnvironment(cyl) || DescribesAmbient(cyl) {
+		t.Error("a cylinder sends no readings and must be neither charted nor combined")
+	}
+
+	probe, ok := got["hw_cylinder_top"]
 	if !ok {
 		t.Fatal("hw_cylinder_top missing after refresh")
 	}
 	if probe.Class != "appliance_probe" || probe.Scheme != "tanktemp" ||
-		probe.Primary != "hw_cylinder.top" || probe.Room != "ground.utility" {
+		probe.Primary != "hw_cylinder.top" || probe.Room != "ground.utility" ||
+		probe.PartOf != "hw_cylinder" {
 		t.Errorf("probe = %+v, want it decoded unchanged", probe)
 	}
 	if !f.Statuses()[testNamespace].OK {
